@@ -214,12 +214,12 @@ func loop(app *App, termCh chan struct{}) error {
 	postDelaySeconds := delayByHost(app.Host)
 	initialDelay := postDelaySeconds / 2
 	logger.Debugf("wait %d seconds before initial posting.", initialDelay)
-	select {
+	/*select {
 	case <-termCh:
 		return nil
 	case <-time.After(time.Duration(initialDelay) * time.Second):
 		app.Agent.InitPluginGenerators(app.API)
-	}
+	}*/
 
 	termMetricsCh := make(chan struct{})
 	var termCheckerCh chan struct{}
@@ -396,11 +396,14 @@ func updateHostSpecsLoop(ctx context.Context, app *App) {
 }
 
 func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue) {
-	metricsResult := app.Agent.Watch(ctx)
+	ticker := make(chan time.Time, 20)
+	metricsResult := app.Agent.Watch(ctx, ticker)
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case t := <-ticker:
+			fmt.Println(t)
 		case result := <-metricsResult:
 			created := result.Created.Unix()
 			var creatingValues []*mkr.HostMetricValue
@@ -679,19 +682,19 @@ func collectHostParam(conf *config.Config, ameta *AgentMeta) (*mkr.CreateHostPar
 // UpdateHostSpecs updates the host information that is already registered on Mackerel.
 func (app *App) UpdateHostSpecs() {
 	logger.Debugf("Updating host specs...")
+	/*
+		hostParam, err := collectHostParam(app.Config, app.AgentMeta)
+		if err != nil {
+			logger.Errorf("While collecting host specs: %s", err)
+			return
+		}
 
-	hostParam, err := collectHostParam(app.Config, app.AgentMeta)
-	if err != nil {
-		logger.Errorf("While collecting host specs: %s", err)
-		return
-	}
-
-	_, err = app.API.UpdateHost(app.Host.ID, (*mkr.UpdateHostParam)(hostParam))
-	if err != nil {
-		logger.Errorf("Error while updating host specs: %s", err)
-	} else {
-		logger.Debugf("Host specs sent.")
-	}
+		_, err = app.API.UpdateHost(app.Host.ID, (*mkr.UpdateHostParam)(hostParam))
+		if err != nil {
+			logger.Errorf("Error while updating host specs: %s", err)
+		} else {
+			logger.Debugf("Host specs sent.")
+		} */
 }
 
 func buildUA(ver, rev string) string {
@@ -788,10 +791,10 @@ func Run(app *App, termCh chan struct{}) error {
 	err := loop(app, termCh)
 	if err == nil && app.Config.HostStatus.OnStop != "" {
 		// TODO error handling. support retire(?)
-		e := app.API.UpdateHostStatus(app.Host.ID, app.Config.HostStatus.OnStop)
+		/*e := app.API.UpdateHostStatus(app.Host.ID, app.Config.HostStatus.OnStop)
 		if e != nil {
 			logger.Errorf("Failed update host status on stop: %s", e)
-		}
+		} */
 	}
 	return err
 }
