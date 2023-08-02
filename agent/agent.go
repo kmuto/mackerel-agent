@@ -55,7 +55,8 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time) cha
 	go func() {
 		from := time.Date(2023, 7, 28, 03, 33, 0, 0, time.Local)
 		// .Add(time.Second * 1)
-		to := time.Date(2023, 7, 28, 18, 0, 0, 0, time.Local)
+		//to := time.Date(2023, 7, 28, 18, 0, 0, 0, time.Local)
+		to := time.Date(2023, 7, 28, 03, 35, 0, 0, time.Local)
 		//t := time.NewTicker(1 * time.Second)
 		t := make(chan time.Time)
 		done := make(chan struct{})
