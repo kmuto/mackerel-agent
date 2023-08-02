@@ -356,25 +356,31 @@ func loop(app *App, termCh chan struct{}) error {
 }
 
 func postHostMetricValuesWithRetry(app *App, postValues []*mkr.HostMetricValue) error {
-	deadline := time.Now().Add(25 * time.Second)
+	// deadline := time.Now().Add(25 * time.Second)
 
-	err := app.API.PostHostMetricValues(postValues)
-	if err == nil {
-		logger.Debugf("Posting metrics succeeded.")
-		return err
+	for i := 0; i < len(postValues); i++ {
+		fmt.Println("post", postValues[i].MetricValue)
 	}
-
-	// If first request did not take so long and it failed on network error, retry once immedeately
-	if time.Now().Before(deadline) && mackerel.IsNetworkError(err) {
-		logger.Warningf("Failed to post metrics value (will retry immediately): %s", err.Error())
-		err = app.API.PostHostMetricValues(postValues)
+	return nil
+	/*
+		err := app.API.PostHostMetricValues(postValues)
 		if err == nil {
-			logger.Debugf("Posting metrics recovered.")
-			return nil
+			logger.Debugf("Posting metrics succeeded.")
+			return err
 		}
-	}
-	logger.Warningf("Failed to post metrics value (will retry): %s", err.Error())
-	return err
+
+		// If first request did not take so long and it failed on network error, retry once immedeately
+		if time.Now().Before(deadline) && mackerel.IsNetworkError(err) {
+			logger.Warningf("Failed to post metrics value (will retry immediately): %s", err.Error())
+			err = app.API.PostHostMetricValues(postValues)
+			if err == nil {
+				logger.Debugf("Posting metrics recovered.")
+				return nil
+			}
+		}
+		logger.Warningf("Failed to post metrics value (will retry): %s", err.Error())
+		return err
+	*/
 }
 
 func updateHostSpecsLoop(ctx context.Context, app *App) {
