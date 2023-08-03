@@ -92,7 +92,7 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time) cha
 
 	const collectMetricsWorkerMax = 3
 
-	go func() {
+	go func(ticker chan time.Time) {
 		// Start collectMetrics concurrently
 		// so that it does not prevent running next collectMetrics.
 		sem := make(chan struct{}, collectMetricsWorkerMax)
@@ -104,7 +104,7 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time) cha
 				<-sem
 			}()
 		}
-	}()
+	}(ticker)
 
 	return metricsResult
 }
