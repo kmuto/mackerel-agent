@@ -10,7 +10,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/Songmu/retry"
 	"github.com/mackerelio/golib/logging"
 	"github.com/mackerelio/mackerel-agent/agent"
 	"github.com/mackerelio/mackerel-agent/checks"
@@ -48,105 +47,115 @@ type AgentMeta struct {
 // prepareHost collects specs of the host and sends them to Mackerel server.
 // A unique host-id is returned by the server if one is not specified.
 func prepareHost(conf *config.Config, ameta *AgentMeta, api *mackerel.API) (*mkr.Host, error) {
-	doRetry := func(f func() error) {
-		retry.Retry(retryNum, retryInterval, f) // nolint
+
+	result2 := &mkr.Host{
+		ID:        "4V5NGvELNaw",
+		Name:      "foobar",
+		IsRetired: false,
 	}
+	return result2, nil
 
-	filterErrorForRetry := func(err error) error {
-		if err != nil {
-			msg := err.Error()
-
-			switch err.(type) {
-			case *mackerel.InfoError:
-				logger.Infof("%s", msg)
-			default:
-				logger.Warningf("%s", msg)
-			}
+	/*
+		doRetry := func(f func() error) {
+			retry.Retry(retryNum, retryInterval, f) // nolint
 		}
-		if mackerel.IsClientError(err) {
-			// don't retry when client error (APIKey error etc.) occurred
-			return nil
-		}
-		return err
-	}
 
-	hostParam, lastErr := collectHostParam(conf, ameta)
-	if lastErr != nil {
-		return nil, fmt.Errorf("error while collecting host specs: %s", lastErr.Error())
-	}
-
-	var result *mkr.Host
-	if hostID, err := conf.LoadHostID(); err != nil { // create
-
-		if hostParam.CustomIdentifier != "" {
-			err = retry.Retry(3, 2*time.Second, func() error {
-				result, lastErr = api.FindHostByCustomIdentifier(hostParam.CustomIdentifier)
-				return filterErrorForRetry(lastErr)
-			})
+		filterErrorForRetry := func(err error) error {
 			if err != nil {
-				logger.Debugf("FindHostByCustomIdentifier error : %s", err.Error())
+				msg := err.Error()
+
+				switch err.(type) {
+				case *mackerel.InfoError:
+					logger.Infof("%s", msg)
+				default:
+					logger.Warningf("%s", msg)
+				}
 			}
-			if result != nil {
-				hostID = result.ID
+			if mackerel.IsClientError(err) {
+				// don't retry when client error (APIKey error etc.) occurred
+				return nil
 			}
+			return err
 		}
 
-		if result == nil {
-			logger.Debugf("Registering new host on mackerel...")
+		hostParam, lastErr := collectHostParam(conf, ameta)
+		if lastErr != nil {
+			return nil, fmt.Errorf("error while collecting host specs: %s", lastErr.Error())
+		}
 
-			doRetry(func() error {
-				hostID, lastErr = api.CreateHost(hostParam)
-				return filterErrorForRetry(lastErr)
-			})
+		var result *mkr.Host
+		if hostID, err := conf.LoadHostID(); err != nil { // create
 
-			if lastErr != nil {
-				return nil, fmt.Errorf("failed to register this host: %s", lastErr.Error())
+			if hostParam.CustomIdentifier != "" {
+				err = retry.Retry(3, 2*time.Second, func() error {
+					result, lastErr = api.FindHostByCustomIdentifier(hostParam.CustomIdentifier)
+					return filterErrorForRetry(lastErr)
+				})
+				if err != nil {
+					logger.Debugf("FindHostByCustomIdentifier error : %s", err.Error())
+				}
+				if result != nil {
+					hostID = result.ID
+				}
 			}
 
+			if result == nil {
+				logger.Debugf("Registering new host on mackerel...")
+
+				doRetry(func() error {
+					hostID, lastErr = api.CreateHost(hostParam)
+					return filterErrorForRetry(lastErr)
+				})
+
+				if lastErr != nil {
+					return nil, fmt.Errorf("failed to register this host: %s", lastErr.Error())
+				}
+
+				doRetry(func() error {
+					result, lastErr = api.FindHost(hostID)
+					return filterErrorForRetry(lastErr)
+				})
+				if lastErr != nil {
+					return nil, fmt.Errorf("failed to find this host on mackerel: %s", lastErr.Error())
+				}
+			}
+		} else { // check the hostID is valid or not
 			doRetry(func() error {
 				result, lastErr = api.FindHost(hostID)
 				return filterErrorForRetry(lastErr)
 			})
 			if lastErr != nil {
+				if fsStorage, ok := conf.HostIDStorage.(*config.FileSystemHostIDStorage); ok {
+					return nil, fmt.Errorf("failed to find this host on mackerel (You may want to delete file \"%s\" to register this host to an another organization): %s", fsStorage.HostIDFile(), lastErr.Error())
+				}
 				return nil, fmt.Errorf("failed to find this host on mackerel: %s", lastErr.Error())
 			}
-		}
-	} else { // check the hostID is valid or not
-		doRetry(func() error {
-			result, lastErr = api.FindHost(hostID)
-			return filterErrorForRetry(lastErr)
-		})
-		if lastErr != nil {
-			if fsStorage, ok := conf.HostIDStorage.(*config.FileSystemHostIDStorage); ok {
-				return nil, fmt.Errorf("failed to find this host on mackerel (You may want to delete file \"%s\" to register this host to an another organization): %s", fsStorage.HostIDFile(), lastErr.Error())
+			if result.CustomIdentifier != "" && result.CustomIdentifier != hostParam.CustomIdentifier {
+				if fsStorage, ok := conf.HostIDStorage.(*config.FileSystemHostIDStorage); ok {
+					return nil, fmt.Errorf("custom identifiers mismatch: this host = \"%s\", the host whose id is \"%s\" on mackerel.io = \"%s\" (File \"%s\" may be copied from another host. Try deleting it and restarting agent)", hostParam.CustomIdentifier, hostID, result.CustomIdentifier, fsStorage.HostIDFile())
+				}
+				return nil, fmt.Errorf("custom identifiers mismatch: this host = \"%s\", the host whose id is \"%s\" on mackerel.io = \"%s\" (Host ID file may be copied from another host. Try deleting it and restarting agent)", hostParam.CustomIdentifier, hostID, result.CustomIdentifier)
 			}
-			return nil, fmt.Errorf("failed to find this host on mackerel: %s", lastErr.Error())
 		}
-		if result.CustomIdentifier != "" && result.CustomIdentifier != hostParam.CustomIdentifier {
-			if fsStorage, ok := conf.HostIDStorage.(*config.FileSystemHostIDStorage); ok {
-				return nil, fmt.Errorf("custom identifiers mismatch: this host = \"%s\", the host whose id is \"%s\" on mackerel.io = \"%s\" (File \"%s\" may be copied from another host. Try deleting it and restarting agent)", hostParam.CustomIdentifier, hostID, result.CustomIdentifier, fsStorage.HostIDFile())
+
+		hostSt := conf.HostStatus.OnStart
+		if hostSt != "" && hostSt != result.Status {
+			doRetry(func() error {
+				lastErr = api.UpdateHostStatus(result.ID, hostSt)
+				return filterErrorForRetry(lastErr)
+			})
+			if lastErr != nil {
+				return nil, fmt.Errorf("failed to set default host status: %s, %s", hostSt, lastErr.Error())
 			}
-			return nil, fmt.Errorf("custom identifiers mismatch: this host = \"%s\", the host whose id is \"%s\" on mackerel.io = \"%s\" (Host ID file may be copied from another host. Try deleting it and restarting agent)", hostParam.CustomIdentifier, hostID, result.CustomIdentifier)
 		}
-	}
 
-	hostSt := conf.HostStatus.OnStart
-	if hostSt != "" && hostSt != result.Status {
-		doRetry(func() error {
-			lastErr = api.UpdateHostStatus(result.ID, hostSt)
-			return filterErrorForRetry(lastErr)
-		})
+		lastErr = conf.SaveHostID(result.ID)
 		if lastErr != nil {
-			return nil, fmt.Errorf("failed to set default host status: %s, %s", hostSt, lastErr.Error())
+			return nil, fmt.Errorf("failed to save host ID: %s", lastErr.Error())
 		}
-	}
 
-	lastErr = conf.SaveHostID(result.ID)
-	if lastErr != nil {
-		return nil, fmt.Errorf("failed to save host ID: %s", lastErr.Error())
-	}
-
-	return result, nil
+		return result2, nil
+	*/
 }
 
 // prepareCustomIdentiferHosts collects the host information based on the
@@ -202,7 +211,7 @@ const (
 )
 
 func loop(app *App, termCh chan struct{}) error {
-	ticker := make(chan time.Time, 20)
+	ticker := make(chan time.Time, 60)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -231,7 +240,7 @@ func loop(app *App, termCh chan struct{}) error {
 			}
 		}
 	}
-	fmt.Println("KENSHI:START", delayedTime)
+	logger.Infof("start at %v", delayedTime)
 
 	termMetricsCh := make(chan struct{})
 	var termCheckerCh chan struct{}
@@ -239,12 +248,12 @@ func loop(app *App, termCh chan struct{}) error {
 
 	hasChecks := len(app.Agent.Checkers) > 0
 	if hasChecks {
-		termCheckerCh = make(chan struct{})
+		//		termCheckerCh = make(chan struct{})
 	}
 
 	hasMetadataPlugins := len(app.Agent.MetadataGenerators) > 0
 	if hasMetadataPlugins {
-		termMetadataCh = make(chan struct{})
+		//		termMetadataCh = make(chan struct{})
 	}
 
 	// fan-out termCh
@@ -261,11 +270,11 @@ func loop(app *App, termCh chan struct{}) error {
 	}()
 
 	if hasChecks {
-		go runCheckersLoop(ctx, app, termCheckerCh)
+		//		go runCheckersLoop(ctx, app, termCheckerCh)
 	}
 
 	if hasMetadataPlugins {
-		go runMetadataLoop(ctx, app, termMetadataCh)
+		//		go runMetadataLoop(ctx, app, termMetadataCh)
 	}
 
 	lState := loopStateFirst
@@ -383,7 +392,7 @@ func postHostMetricValuesWithRetry(app *App, postValues []*mkr.HostMetricValue) 
 	// deadline := time.Now().Add(25 * time.Second)
 
 	for i := 0; i < len(postValues); i++ {
-		fmt.Println("post", postValues[i].MetricValue)
+		logger.Debugf("post %v", postValues[i].MetricValue)
 	}
 	return nil
 	/*
