@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/mackerelio/mackerel-agent/checks"
@@ -29,10 +28,8 @@ type MetricsResult struct {
 
 // CollectMetrics collects metrics with generators.
 func (agent *Agent) CollectMetrics(collectedTime time.Time) *MetricsResult {
-	fmt.Println("HOGE4") // TODO
 	return &MetricsResult{Created: collectedTime, Values: nil}
 	/*
-	   fmt.Println("HOGE4")
 	   generators := agent.MetricsGenerators
 
 	   	for _, g := range agent.PluginGenerators {
@@ -40,7 +37,6 @@ func (agent *Agent) CollectMetrics(collectedTime time.Time) *MetricsResult {
 	   	}
 
 	   values := generateValues_mock(generators)
-	   fmt.Println("HOGE5")
 	   return &MetricsResult{Created: collectedTime, Values: values}
 	*/
 }
@@ -55,7 +51,7 @@ func ticktuck(result chan time.Time, from time.Time, to time.Time, done chan str
 }
 
 // Watch XXX
-func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time) chan *MetricsResult {
+func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time, done chan struct{}) chan *MetricsResult {
 
 	metricsResult := make(chan *MetricsResult)
 	ticker := make(chan time.Time)
@@ -68,7 +64,6 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time) cha
 		to := time.Date(2023, 7, 28, 03, 40, 0, 0, time.Local)
 		//t := time.NewTicker(1 * time.Second)
 		t := make(chan time.Time, 1)
-		done := make(chan struct{})
 		go ticktuck(t, from, to, done)
 
 		last := from
