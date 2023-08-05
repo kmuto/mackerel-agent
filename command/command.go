@@ -218,7 +218,8 @@ func loop(app *App, termCh chan struct{}) error {
 	go updateHostSpecsLoop(ctx, app)
 
 	postQueue := make(chan *postValue, postMetricsBufferSize)
-	go enqueueLoop(ctx, app, postQueue, ticker)
+	done := make(chan struct{})
+	go enqueueLoop(ctx, app, postQueue, ticker, done)
 
 	postDelaySeconds := delayByHost(app.Host)
 	initialDelay := postDelaySeconds / 2
@@ -247,12 +248,12 @@ func loop(app *App, termCh chan struct{}) error {
 
 	hasChecks := len(app.Agent.Checkers) > 0
 	if hasChecks {
-		//		termCheckerCh = make(chan struct{})
+		termCheckerCh = make(chan struct{})
 	}
 
 	hasMetadataPlugins := len(app.Agent.MetadataGenerators) > 0
 	if hasMetadataPlugins {
-		//		termMetadataCh = make(chan struct{})
+		termMetadataCh = make(chan struct{})
 	}
 
 	// fan-out termCh
@@ -291,6 +292,8 @@ func loop(app *App, termCh chan struct{}) error {
 			if len(postQueue) <= 0 {
 				return nil
 			}
+		case <-done:
+			termCh <- struct{}{}
 		case v := <-postQueue:
 			origPostValues := [](*postValue){v}
 			if len(postQueue) > 0 {
@@ -428,11 +431,15 @@ func updateHostSpecsLoop(ctx context.Context, app *App) {
 		} */
 }
 
-func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue, ticker chan time.Time) {
-	metricsResult := app.Agent.Watch(ctx, ticker)
+func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue, ticker chan time.Time, done chan struct{}) {
+	done2 := make(chan struct{})
+	metricsResult := app.Agent.Watch(ctx, ticker, done2)
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-done2:
+			done <- struct{}{}
 			return
 		case result := <-metricsResult:
 			created := result.Created.Unix()
@@ -473,14 +480,14 @@ func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue, ticke
 					)
 				}
 			} */
-			logger.Debugf("Enqueuing task to post metrics. %v", time.Unix(created, 0))
+			// logger.Debugf("Enqueuing task to post metrics. %v", time.Unix(created, 0))
+			fmt.Printf("POST %v\n", time.Unix(created, 0))
 			postQueue <- newPostValue(creatingValues)
 		}
 	}
 }
 
 func runChecker(ctx context.Context, checker *checks.Checker, checkReportCh chan *checks.Report, reportImmediateCh chan struct{}) {
-	logger.Debugf("KENSHI:ここにはこないはず")
 	lastStatus := checks.StatusUndefined
 	lastMessage := ""
 	interval := checker.Interval()
@@ -544,7 +551,6 @@ func runChecker(ctx context.Context, checker *checks.Checker, checkReportCh chan
 // which run for each checker commands and one for HTTP POSTing
 // the reports to Mackerel API.
 func runCheckersLoop(ctx context.Context, app *App, termCheckerCh <-chan struct{}) {
-	logger.Debugf("KENSHI:ここにはこないはず")
 	// Do not block checking.
 	checkReportCh := make(chan *checks.Report, reportCheckBufferSize*len(app.Agent.Checkers))
 	reportImmediateCh := make(chan struct{}, reportCheckBufferSize*len(app.Agent.Checkers))
@@ -617,7 +623,6 @@ func runCheckersLoop(ctx context.Context, app *App, termCheckerCh <-chan struct{
 }
 
 func reportCheckMonitors(app *App, customIdentifier string, reports []*checks.Report) {
-	logger.Debugf("KENSHI:ここにはこないはず")
 	hostID := app.Host.ID
 	if customIdentifier != "" {
 		if host, ok := app.CustomIdentifierHosts[customIdentifier]; ok {
@@ -644,7 +649,6 @@ func reportCheckMonitors(app *App, customIdentifier string, reports []*checks.Re
 }
 
 func reportCheckMonitorsInternal(app *App, hostID string, reports []*checks.Report) error {
-	logger.Debugf("KENSHI:ここにはこないはず")
 	deadline := time.Now().Add(25 * time.Second)
 
 	err := app.API.ReportCheckMonitors(hostID, reports)
@@ -799,7 +803,6 @@ func RunOnce(conf *config.Config, ameta *AgentMeta) error {
 }
 
 func runOncePayload(conf *config.Config, ameta *AgentMeta) ([]*mkr.GraphDefsParam, *mkr.CreateHostParam, *agent.MetricsResult, error) {
-	// ここにはこない
 	hostParam, err := collectHostParam(conf, ameta)
 	if err != nil {
 		logger.Errorf("While collecting host specs: %s", err)
