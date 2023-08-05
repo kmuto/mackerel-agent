@@ -387,6 +387,7 @@ func loop(app *App, termCh chan struct{}) error {
 				go func() {
 					for _, v := range origPostValues {
 						v.retryCnt++
+						fmt.Println("K:", nowTime.Unix(), ":REQUEUE(", v.retryCnt, "):", v.values[0].Time)
 						// It is difficult to distinguish the error is server error or data error.
 						// So, if retryCnt exceeded the configured limit, postValue is considered invalid and abandoned.
 						if v.retryCnt > postMetricsRetryMax {
