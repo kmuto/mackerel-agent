@@ -299,6 +299,12 @@ func loop(app *App, termCh chan struct{}) error {
 				return nil
 			}
 		case <-done:
+			if len(postQueue) > 0 {
+				close(postQueue)
+				for v := range postQueue {
+					fmt.Println("K:", nowTime.Unix(), ":REMAIN:", v.values[0].Time)
+				}
+			}
 			termCh <- struct{}{}
 		case v := <-postQueue:
 			origPostValues := [](*postValue){v}
@@ -343,7 +349,15 @@ func loop(app *App, termCh chan struct{}) error {
 				}
 			}
 
-			<-ticker
+			select {
+			case <-ticker:
+			case <-done:
+				close(postQueue)
+				for v := range postQueue {
+					fmt.Println("K:", nowTime.Unix(), ":REMAIN:", v.values[0].Time)
+				}
+				return nil
+			}
 			logger.Debugf("Sleep %d seconds before posting.", delaySeconds)
 			delayedTime := (<-ticker).Add(time.Duration(delaySeconds) * time.Second)
 

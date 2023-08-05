@@ -13,9 +13,13 @@ ARGF.each do |l|
     w: v[2],
     ms: v[3] # 2つ入っていることがあるのでまだいじらない
   }
+  if v[3].nil?
+    raise l
+  end
 end
 
 lost = []
+remain = []
 sorted_array = array.sort {|a, b| a[:t] <=> b[:t] }
 sorted_array.each do |v|
   s = ''
@@ -31,10 +35,19 @@ sorted_array.each do |v|
   if v[:w] == 'LOST'
     lost << s
   end
+  if v[:w] == 'REMAIN'
+    remain << s
+  end
 end
 
 if lost.size > 0
   puts '-----'
   puts 'LOST:'
   puts lost.sort.join("\n")
+end
+
+if remain.size > 0
+  puts '-----'
+  puts 'REMAIN:'
+  puts remain.sort.join("\n")
 end
