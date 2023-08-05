@@ -241,7 +241,7 @@ func loop(app *App, termCh chan struct{}) error {
 		}
 	}
 	//logger.Infof("start at %v", delayedTime)
-	fmt.Println("START", delayedTime)
+	fmt.Println("K:START:", delayedTime)
 
 	termMetricsCh := make(chan struct{})
 	var termCheckerCh chan struct{}
@@ -482,7 +482,7 @@ func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue, ticke
 				}
 			} */
 			// logger.Debugf("Enqueuing task to post metrics. %v", time.Unix(created, 0))
-			fmt.Printf("POST %v\n", time.Unix(created, 0))
+			fmt.Println("K:CREATE:", time.Unix(created, 0))
 			postQueue <- newPostValue(creatingValues)
 		}
 	}
