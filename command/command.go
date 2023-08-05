@@ -240,7 +240,8 @@ func loop(app *App, termCh chan struct{}) error {
 			}
 		}
 	}
-	logger.Infof("start at %v", delayedTime)
+	//logger.Infof("start at %v", delayedTime)
+	fmt.Println("START", delayedTime)
 
 	termMetricsCh := make(chan struct{})
 	var termCheckerCh chan struct{}
