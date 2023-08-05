@@ -403,7 +403,6 @@ func postHostMetricValuesWithRetry_mock(app *App, postValues []*mkr.HostMetricVa
 
 	isDowntime := false
 	for _, Down := range app.Config.SimDowns {
-		//Down := app.Config.SimDowns[i]
 		from, err := time.Parse("2006-01-02T15:04:05Z07:00", Down[0])
 		if err != nil {
 			logger.Errorf("down from format error %v", err)

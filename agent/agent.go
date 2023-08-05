@@ -121,6 +121,7 @@ func (agent *Agent) Watch(ctx context.Context) chan *MetricsResult {
 	metricsResult := make(chan *MetricsResult)
 	ticker := make(chan time.Time)
 	interval := config.PostMetricsInterval
+
 	go func() {
 		t := time.NewTicker(1 * time.Second)
 
