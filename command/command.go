@@ -401,26 +401,40 @@ func loop(app *App, termCh chan struct{}) error {
 func postHostMetricValuesWithRetry_mock(app *App, postValues []*mkr.HostMetricValue, nowTime time.Time) error {
 	deadline := nowTime.Add(25 * time.Second)
 
-	// 障害発生
-	from := time.Date(2023, 7, 28, 03, 35, 0, 0, time.Local)
-	to := time.Date(2023, 7, 28, 13, 45, 0, 0, time.Local)
+	isDowntime := false
+	for _, Down := range app.Config.SimDowns {
+		//Down := app.Config.SimDowns[i]
+		from, err := time.Parse("2006-01-02T15:04:05Z07:00", Down[0])
+		if err != nil {
+			logger.Errorf("down from format error %v", err)
+			return errors.New("time format error")
+		}
+		to, err := time.Parse("2006-01-02T15:04:05Z07:00", Down[1])
+		if err != nil {
+			logger.Errorf("down to format error %v", err)
+			return errors.New("time format error")
+		}
+		if (from.Equal(nowTime) || from.Before(nowTime)) && to.After(nowTime) {
+			isDowntime = true
+		}
+	}
 
-	if (from.Equal(nowTime) || from.Before(nowTime)) && to.After(nowTime) {
+	if isDowntime {
 		// 障害タイム
-		for i := 0; i < len(postValues); i++ {
-			fmt.Println("K:", nowTime.Unix(), ":FAILED:", postValues[i].Time)
+		for _, postValue := range postValues {
+			fmt.Println("K:", nowTime.Unix(), ":FAILED:", postValue.Time)
 		}
 		// 絶対に失敗するが再送
 		if nowTime.Before(deadline) {
-			for i := 0; i < len(postValues); i++ {
-				fmt.Println("K:", nowTime.Unix(), ":RETRYFAILED:", postValues[i].Time)
+			for _, postValue := range postValues {
+				fmt.Println("K:", nowTime.Unix(), ":RETRYFAILED:", postValue.Time)
 			}
 		}
 		err := errors.New("network connection problem")
 		return err
 	} else {
-		for i := 0; i < len(postValues); i++ {
-			fmt.Println("K:", nowTime.Unix(), ":SUCCESS:", postValues[i].Time)
+		for _, postValue := range postValues {
+			fmt.Println("K:", nowTime.Unix(), ":SUCCESS:", postValue.Time)
 		}
 		return nil
 	}
@@ -462,7 +476,11 @@ func updateHostSpecsLoop(ctx context.Context, app *App) {
 
 func enqueueLoop_mock(ctx context.Context, app *App, postQueue chan *postValue, ticker chan time.Time, done chan struct{}) {
 	done2 := make(chan struct{})
-	metricsResult := app.Agent.Watch_mock(ctx, ticker, done2)
+	metricsResult, err := app.Agent.Watch_mock(app.Config, ctx, ticker, done2)
+	if err != nil {
+		done <- struct{}{}
+		return
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -817,7 +835,6 @@ func Prepare(conf *config.Config, ameta *AgentMeta) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare host: %s", err.Error())
 	}
-
 	return &App{
 		Agent:                 NewAgent(conf),
 		Config:                conf,

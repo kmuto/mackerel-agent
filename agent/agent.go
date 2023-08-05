@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/mackerelio/mackerel-agent/checks"
@@ -49,14 +50,23 @@ func ticktuck(result chan time.Time, from time.Time, to time.Time, done chan str
 	done <- struct{}{}
 }
 
-func (agent *Agent) Watch_mock(ctx context.Context, commandTicker chan time.Time, done chan struct{}) chan *MetricsResult {
+func (agent *Agent) Watch_mock(conf *config.Config, ctx context.Context, commandTicker chan time.Time, done chan struct{}) (chan *MetricsResult, error) {
 	metricsResult := make(chan *MetricsResult)
 	ticker := make(chan time.Time)
 	interval := config.PostMetricsInterval
 
+	from, err := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimFrom)
+	if err != nil {
+		logger.Errorf("from format error %v", err)
+		return nil, errors.New("time format error")
+	}
+	to, err := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimTo)
+	if err != nil {
+		logger.Errorf("to format error %v", err)
+		return nil, errors.New("time format error")
+	}
+
 	go func() {
-		from := time.Date(2023, 7, 28, 03, 33, 0, 0, time.Local)
-		to := time.Date(2023, 7, 28, 19, 0, 0, 0, time.Local)
 		t := make(chan time.Time, 1)
 		go ticktuck(t, from, to, done)
 
@@ -103,7 +113,7 @@ func (agent *Agent) Watch_mock(ctx context.Context, commandTicker chan time.Time
 		}
 	}(ticker)
 
-	return metricsResult
+	return metricsResult, nil
 }
 
 // Watch XXX
@@ -112,7 +122,6 @@ func (agent *Agent) Watch(ctx context.Context) chan *MetricsResult {
 	metricsResult := make(chan *MetricsResult)
 	ticker := make(chan time.Time)
 	interval := config.PostMetricsInterval
-
 	go func() {
 		t := time.NewTicker(1 * time.Second)
 
