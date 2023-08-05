@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -122,6 +123,7 @@ func clearMetadataCache(generators []*metadata.Generator, namespace string) {
 }
 
 func runEachMetadataLoop(ctx context.Context, g *metadata.Generator, resultCh chan<- *metadataResult) {
+	fmt.Println("ここにはこないはず runEachMetadataLoop")
 	interval := g.Interval()
 	nextInterval := 10 * time.Second
 	nextTime := time.Now()

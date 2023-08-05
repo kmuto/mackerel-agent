@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/mackerelio/mackerel-agent/checks"
@@ -28,12 +29,20 @@ type MetricsResult struct {
 
 // CollectMetrics collects metrics with generators.
 func (agent *Agent) CollectMetrics(collectedTime time.Time) *MetricsResult {
-	generators := agent.MetricsGenerators
-	for _, g := range agent.PluginGenerators {
-		generators = append(generators, g)
-	}
-	values := generateValues(generators)
-	return &MetricsResult{Created: collectedTime, Values: values}
+	fmt.Println("HOGE4") // TODO
+	return &MetricsResult{Created: collectedTime, Values: nil}
+	/*
+	   fmt.Println("HOGE4")
+	   generators := agent.MetricsGenerators
+
+	   	for _, g := range agent.PluginGenerators {
+	   		generators = append(generators, g)
+	   	}
+
+	   values := generateValues_mock(generators)
+	   fmt.Println("HOGE5")
+	   return &MetricsResult{Created: collectedTime, Values: values}
+	*/
 }
 
 func ticktuck(result chan time.Time, from time.Time, to time.Time, done chan struct{}) {
@@ -56,9 +65,9 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time) cha
 		from := time.Date(2023, 7, 28, 03, 33, 0, 0, time.Local)
 		// .Add(time.Second * 1)
 		//to := time.Date(2023, 7, 28, 18, 0, 0, 0, time.Local)
-		to := time.Date(2023, 7, 28, 03, 35, 0, 0, time.Local)
+		to := time.Date(2023, 7, 28, 03, 40, 0, 0, time.Local)
 		//t := time.NewTicker(1 * time.Second)
-		t := make(chan time.Time)
+		t := make(chan time.Time, 1)
 		done := make(chan struct{})
 		go ticktuck(t, from, to, done)
 
@@ -71,8 +80,13 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time) cha
 				close(ticker)
 				close(t)
 				return
+			case <-done:
+				close(ticker)
+				close(t)
+				return
 			case ti := <-t:
 				commandTicker <- ti
+				// fmt.Println("HOGE2", ti, ":", ti.Second()%int(interval.Seconds()))
 				// Fire an event at 0 second per minute.
 				// Because ticks may not be accurate,
 				// fire an event if t - last is more than 1 minute
@@ -83,6 +97,7 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time) cha
 					select {
 					case ticker <- ti:
 						last = ti
+						// fmt.Println("KENSHI:last", last)
 					default:
 					}
 				}
@@ -98,6 +113,7 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time) cha
 		sem := make(chan struct{}, collectMetricsWorkerMax)
 		for tickedTime := range ticker {
 			ti := tickedTime
+			// fmt.Println("HOGE3", ti)
 			sem <- struct{}{}
 			go func() {
 				metricsResult <- agent.CollectMetrics(ti)

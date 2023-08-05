@@ -89,6 +89,7 @@ func (c *Checker) Check() *Report {
 // Interval is the interval where the command is invoked.
 func (c *Checker) Interval() time.Duration {
 	if c.Config.CheckInterval != nil {
+		fmt.Println("ここにこないはず")
 		interval := time.Duration(*c.Config.CheckInterval) * time.Minute
 		if interval < 1*time.Minute {
 			interval = 1 * time.Minute

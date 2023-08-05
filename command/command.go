@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"os"
 	"time"
@@ -211,7 +210,7 @@ const (
 )
 
 func loop(app *App, termCh chan struct{}) error {
-	ticker := make(chan time.Time, 60)
+	ticker := make(chan time.Time, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -437,9 +436,16 @@ func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue, ticke
 			return
 		case result := <-metricsResult:
 			created := result.Created.Unix()
-			fmt.Println("KENSHI:CREATED:", time.Unix(created, 0))
 			var creatingValues []*mkr.HostMetricValue
-			for _, values := range result.Values {
+			creatingValues = append(creatingValues, &mkr.HostMetricValue{
+				HostID: "9rxGOHfVF8F",
+				MetricValue: &mkr.MetricValue{
+					Name:  "custom.test1",
+					Time:  created,
+					Value: 100,
+				},
+			})
+			/*for _, values := range result.Values {
 				hostID := app.Host.ID
 				if values.CustomIdentifier != nil {
 					if host, ok := app.CustomIdentifierHosts[*values.CustomIdentifier]; ok {
@@ -466,8 +472,8 @@ func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue, ticke
 						},
 					)
 				}
-			}
-			logger.Debugf("Enqueuing task to post metrics.")
+			} */
+			logger.Debugf("Enqueuing task to post metrics. %v", time.Unix(created, 0))
 			postQueue <- newPostValue(creatingValues)
 		}
 	}
@@ -793,6 +799,7 @@ func RunOnce(conf *config.Config, ameta *AgentMeta) error {
 }
 
 func runOncePayload(conf *config.Config, ameta *AgentMeta) ([]*mkr.GraphDefsParam, *mkr.CreateHostParam, *agent.MetricsResult, error) {
+	// ここにはこない
 	hostParam, err := collectHostParam(conf, ameta)
 	if err != nil {
 		logger.Errorf("While collecting host specs: %s", err)

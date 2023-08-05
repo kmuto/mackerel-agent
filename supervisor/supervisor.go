@@ -93,6 +93,7 @@ func (sv *supervisor) buildCmd() *exec.Cmd {
 }
 
 func (sv *supervisor) start() error {
+	fmt.Println("supervisorここにはこないはず")
 	sv.mu.Lock()
 	sv.setHupped(false)
 	defer sv.mu.Unlock()
