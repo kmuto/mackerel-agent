@@ -104,7 +104,6 @@ func (agent *Agent) Watch_mock(conf *config.Config, ctx context.Context, command
 		sem := make(chan struct{}, collectMetricsWorkerMax)
 		for tickedTime := range ticker {
 			ti := tickedTime
-			// fmt.Println("HOGE3", ti)
 			sem <- struct{}{}
 			go func() {
 				metricsResult <- agent.CollectMetrics_mock(ti)
