@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/Songmu/retry"
 	"github.com/mackerelio/golib/logging"
 	"github.com/mackerelio/mackerel-agent/agent"
 	"github.com/mackerelio/mackerel-agent/checks"
@@ -43,118 +46,117 @@ type AgentMeta struct {
 	Revision string
 }
 
-// prepareHost collects specs of the host and sends them to Mackerel server.
-// A unique host-id is returned by the server if one is not specified.
-func prepareHost(conf *config.Config, ameta *AgentMeta, api *mackerel.API) (*mkr.Host, error) {
-
-	result2 := &mkr.Host{
+func prepareHost_mock(conf *config.Config, ameta *AgentMeta, api *mackerel.API) (*mkr.Host, error) {
+	result := &mkr.Host{
 		ID:        "4V5NGvELNaw",
 		Name:      "foobar",
 		IsRetired: false,
 	}
-	return result2, nil
+	return result, nil
+}
 
-	/*
-		doRetry := func(f func() error) {
-			retry.Retry(retryNum, retryInterval, f) // nolint
+// prepareHost collects specs of the host and sends them to Mackerel server.
+// A unique host-id is returned by the server if one is not specified.
+func prepareHost(conf *config.Config, ameta *AgentMeta, api *mackerel.API) (*mkr.Host, error) {
+	doRetry := func(f func() error) {
+		retry.Retry(retryNum, retryInterval, f) // nolint
+	}
+
+	filterErrorForRetry := func(err error) error {
+		if err != nil {
+			msg := err.Error()
+
+			switch err.(type) {
+			case *mackerel.InfoError:
+				logger.Infof("%s", msg)
+			default:
+				logger.Warningf("%s", msg)
+			}
 		}
+		if mackerel.IsClientError(err) {
+			// don't retry when client error (APIKey error etc.) occurred
+			return nil
+		}
+		return err
+	}
 
-		filterErrorForRetry := func(err error) error {
+	hostParam, lastErr := collectHostParam(conf, ameta)
+	if lastErr != nil {
+		return nil, fmt.Errorf("error while collecting host specs: %s", lastErr.Error())
+	}
+
+	var result *mkr.Host
+	if hostID, err := conf.LoadHostID(); err != nil { // create
+
+		if hostParam.CustomIdentifier != "" {
+			err = retry.Retry(3, 2*time.Second, func() error {
+				result, lastErr = api.FindHostByCustomIdentifier(hostParam.CustomIdentifier)
+				return filterErrorForRetry(lastErr)
+			})
 			if err != nil {
-				msg := err.Error()
-
-				switch err.(type) {
-				case *mackerel.InfoError:
-					logger.Infof("%s", msg)
-				default:
-					logger.Warningf("%s", msg)
-				}
+				logger.Debugf("FindHostByCustomIdentifier error : %s", err.Error())
 			}
-			if mackerel.IsClientError(err) {
-				// don't retry when client error (APIKey error etc.) occurred
-				return nil
+			if result != nil {
+				hostID = result.ID
 			}
-			return err
 		}
 
-		hostParam, lastErr := collectHostParam(conf, ameta)
-		if lastErr != nil {
-			return nil, fmt.Errorf("error while collecting host specs: %s", lastErr.Error())
-		}
+		if result == nil {
+			logger.Debugf("Registering new host on mackerel...")
 
-		var result *mkr.Host
-		if hostID, err := conf.LoadHostID(); err != nil { // create
+			doRetry(func() error {
+				hostID, lastErr = api.CreateHost(hostParam)
+				return filterErrorForRetry(lastErr)
+			})
 
-			if hostParam.CustomIdentifier != "" {
-				err = retry.Retry(3, 2*time.Second, func() error {
-					result, lastErr = api.FindHostByCustomIdentifier(hostParam.CustomIdentifier)
-					return filterErrorForRetry(lastErr)
-				})
-				if err != nil {
-					logger.Debugf("FindHostByCustomIdentifier error : %s", err.Error())
-				}
-				if result != nil {
-					hostID = result.ID
-				}
+			if lastErr != nil {
+				return nil, fmt.Errorf("failed to register this host: %s", lastErr.Error())
 			}
 
-			if result == nil {
-				logger.Debugf("Registering new host on mackerel...")
-
-				doRetry(func() error {
-					hostID, lastErr = api.CreateHost(hostParam)
-					return filterErrorForRetry(lastErr)
-				})
-
-				if lastErr != nil {
-					return nil, fmt.Errorf("failed to register this host: %s", lastErr.Error())
-				}
-
-				doRetry(func() error {
-					result, lastErr = api.FindHost(hostID)
-					return filterErrorForRetry(lastErr)
-				})
-				if lastErr != nil {
-					return nil, fmt.Errorf("failed to find this host on mackerel: %s", lastErr.Error())
-				}
-			}
-		} else { // check the hostID is valid or not
 			doRetry(func() error {
 				result, lastErr = api.FindHost(hostID)
 				return filterErrorForRetry(lastErr)
 			})
 			if lastErr != nil {
-				if fsStorage, ok := conf.HostIDStorage.(*config.FileSystemHostIDStorage); ok {
-					return nil, fmt.Errorf("failed to find this host on mackerel (You may want to delete file \"%s\" to register this host to an another organization): %s", fsStorage.HostIDFile(), lastErr.Error())
-				}
 				return nil, fmt.Errorf("failed to find this host on mackerel: %s", lastErr.Error())
 			}
-			if result.CustomIdentifier != "" && result.CustomIdentifier != hostParam.CustomIdentifier {
-				if fsStorage, ok := conf.HostIDStorage.(*config.FileSystemHostIDStorage); ok {
-					return nil, fmt.Errorf("custom identifiers mismatch: this host = \"%s\", the host whose id is \"%s\" on mackerel.io = \"%s\" (File \"%s\" may be copied from another host. Try deleting it and restarting agent)", hostParam.CustomIdentifier, hostID, result.CustomIdentifier, fsStorage.HostIDFile())
-				}
-				return nil, fmt.Errorf("custom identifiers mismatch: this host = \"%s\", the host whose id is \"%s\" on mackerel.io = \"%s\" (Host ID file may be copied from another host. Try deleting it and restarting agent)", hostParam.CustomIdentifier, hostID, result.CustomIdentifier)
-			}
 		}
-
-		hostSt := conf.HostStatus.OnStart
-		if hostSt != "" && hostSt != result.Status {
-			doRetry(func() error {
-				lastErr = api.UpdateHostStatus(result.ID, hostSt)
-				return filterErrorForRetry(lastErr)
-			})
-			if lastErr != nil {
-				return nil, fmt.Errorf("failed to set default host status: %s, %s", hostSt, lastErr.Error())
-			}
-		}
-
-		lastErr = conf.SaveHostID(result.ID)
+	} else { // check the hostID is valid or not
+		doRetry(func() error {
+			result, lastErr = api.FindHost(hostID)
+			return filterErrorForRetry(lastErr)
+		})
 		if lastErr != nil {
-			return nil, fmt.Errorf("failed to save host ID: %s", lastErr.Error())
+			if fsStorage, ok := conf.HostIDStorage.(*config.FileSystemHostIDStorage); ok {
+				return nil, fmt.Errorf("failed to find this host on mackerel (You may want to delete file \"%s\" to register this host to an another organization): %s", fsStorage.HostIDFile(), lastErr.Error())
+			}
+			return nil, fmt.Errorf("failed to find this host on mackerel: %s", lastErr.Error())
 		}
+		if result.CustomIdentifier != "" && result.CustomIdentifier != hostParam.CustomIdentifier {
+			if fsStorage, ok := conf.HostIDStorage.(*config.FileSystemHostIDStorage); ok {
+				return nil, fmt.Errorf("custom identifiers mismatch: this host = \"%s\", the host whose id is \"%s\" on mackerel.io = \"%s\" (File \"%s\" may be copied from another host. Try deleting it and restarting agent)", hostParam.CustomIdentifier, hostID, result.CustomIdentifier, fsStorage.HostIDFile())
+			}
+			return nil, fmt.Errorf("custom identifiers mismatch: this host = \"%s\", the host whose id is \"%s\" on mackerel.io = \"%s\" (Host ID file may be copied from another host. Try deleting it and restarting agent)", hostParam.CustomIdentifier, hostID, result.CustomIdentifier)
+		}
+	}
 
-		return result2, nil
-	*/
+	hostSt := conf.HostStatus.OnStart
+	if hostSt != "" && hostSt != result.Status {
+		doRetry(func() error {
+			lastErr = api.UpdateHostStatus(result.ID, hostSt)
+			return filterErrorForRetry(lastErr)
+		})
+		if lastErr != nil {
+			return nil, fmt.Errorf("failed to set default host status: %s, %s", hostSt, lastErr.Error())
+		}
+	}
+
+	lastErr = conf.SaveHostID(result.ID)
+	if lastErr != nil {
+		return nil, fmt.Errorf("failed to save host ID: %s", lastErr.Error())
+	}
+
+	return result, nil
 }
 
 // prepareCustomIdentiferHosts collects the host information based on the
@@ -209,17 +211,19 @@ const (
 	loopStateTerminating
 )
 
+// ここにいろいろ仕込んだ(kmuto)
 func loop(app *App, termCh chan struct{}) error {
 	ticker := make(chan time.Time, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// 省略した
 	// Periodically update host specs.
-	go updateHostSpecsLoop(ctx, app)
+	// go updateHostSpecsLoop(ctx, app)
 
 	postQueue := make(chan *postValue, postMetricsBufferSize)
 	done := make(chan struct{})
-	go enqueueLoop(ctx, app, postQueue, ticker, done)
+	go enqueueLoop_mock(ctx, app, postQueue, ticker, done)
 
 	postDelaySeconds := delayByHost(app.Host)
 	initialDelay := postDelaySeconds / 2
@@ -232,8 +236,9 @@ func loop(app *App, termCh chan struct{}) error {
 		return nil
 	case t := <-ticker:
 		if !flag {
-			delayedTime = t.Add(time.Duration(initialDelay) * time.Second)
+			// delayedTime = t.Add(time.Duration(initialDelay) * time.Second)
 			flag = true
+			// fmt.Println("K:", t, ":INITIALDELAY:")
 		} else {
 			if t.Equal(delayedTime) || t.After(delayedTime) {
 				break
@@ -241,7 +246,7 @@ func loop(app *App, termCh chan struct{}) error {
 		}
 	}
 	//logger.Infof("start at %v", delayedTime)
-	fmt.Println("K:START:", delayedTime)
+	// fmt.Println("K:", delayedTime, ":START:", delayedTime)
 
 	termMetricsCh := make(chan struct{})
 	var termCheckerCh chan struct{}
@@ -271,11 +276,11 @@ func loop(app *App, termCh chan struct{}) error {
 	}()
 
 	if hasChecks {
-		//		go runCheckersLoop(ctx, app, termCheckerCh)
+		go runCheckersLoop(ctx, app, termCheckerCh)
 	}
 
 	if hasMetadataPlugins {
-		//		go runMetadataLoop(ctx, app, termMetadataCh)
+		go runMetadataLoop(ctx, app, termMetadataCh)
 	}
 
 	lState := loopStateFirst
@@ -302,6 +307,7 @@ func loop(app *App, termCh chan struct{}) error {
 				logger.Debugf("Merging datapoints with next queued ones")
 				nextValues := <-postQueue
 				origPostValues = append(origPostValues, nextValues)
+				fmt.Println("K:", nowTime.Unix(), ":BULKMODE:", origPostValues[0].values[0].Time, origPostValues[1].values[0].Time)
 			}
 
 			delaySeconds := 0
@@ -359,7 +365,7 @@ func loop(app *App, termCh chan struct{}) error {
 			for _, v := range origPostValues {
 				postValues = append(postValues, v.values...)
 			}
-			err := postHostMetricValuesWithRetry(app, postValues)
+			err := postHostMetricValuesWithRetry_mock(app, postValues, nowTime)
 			if err != nil {
 				if lState != loopStateTerminating {
 					lState = loopStateHadError
@@ -370,12 +376,13 @@ func loop(app *App, termCh chan struct{}) error {
 						// It is difficult to distinguish the error is server error or data error.
 						// So, if retryCnt exceeded the configured limit, postValue is considered invalid and abandoned.
 						if v.retryCnt > postMetricsRetryMax {
-							json, err := json.Marshal(v.values)
+							fmt.Println("K:", nowTime.Unix(), ":LOST:", v.values[0].Time)
+							/* json, err := json.Marshal(v.values)
 							if err != nil {
 								logger.Errorf("Something wrong with post values. marshaling failed.")
 							} else {
 								logger.Errorf("Post values may be invalid and abandoned: %s", string(json))
-							}
+							} */
 							continue
 						}
 						postQueue <- v
@@ -391,50 +398,71 @@ func loop(app *App, termCh chan struct{}) error {
 	}
 }
 
-func postHostMetricValuesWithRetry(app *App, postValues []*mkr.HostMetricValue) error {
-	// deadline := time.Now().Add(25 * time.Second)
+func postHostMetricValuesWithRetry_mock(app *App, postValues []*mkr.HostMetricValue, nowTime time.Time) error {
+	deadline := nowTime.Add(25 * time.Second)
 
-	for i := 0; i < len(postValues); i++ {
-		logger.Debugf("post %v", postValues[i].MetricValue)
-	}
-	return nil
-	/*
-		err := app.API.PostHostMetricValues(postValues)
-		if err == nil {
-			logger.Debugf("Posting metrics succeeded.")
-			return err
+	// 障害発生
+	from := time.Date(2023, 7, 28, 03, 35, 0, 0, time.Local)
+	to := time.Date(2023, 7, 28, 13, 45, 0, 0, time.Local)
+
+	if (from.Equal(nowTime) || from.Before(nowTime)) && to.After(nowTime) {
+		// 障害タイム
+		for i := 0; i < len(postValues); i++ {
+			fmt.Println("K:", nowTime.Unix(), ":FAILED:", postValues[i].Time)
 		}
-
-		// If first request did not take so long and it failed on network error, retry once immedeately
-		if time.Now().Before(deadline) && mackerel.IsNetworkError(err) {
-			logger.Warningf("Failed to post metrics value (will retry immediately): %s", err.Error())
-			err = app.API.PostHostMetricValues(postValues)
-			if err == nil {
-				logger.Debugf("Posting metrics recovered.")
-				return nil
+		// 絶対に失敗するが再送
+		if nowTime.Before(deadline) {
+			for i := 0; i < len(postValues); i++ {
+				fmt.Println("K:", nowTime.Unix(), ":RETRYFAILED:", postValues[i].Time)
 			}
 		}
-		logger.Warningf("Failed to post metrics value (will retry): %s", err.Error())
+		err := errors.New("network connection problem")
 		return err
-	*/
+	} else {
+		for i := 0; i < len(postValues); i++ {
+			fmt.Println("K:", nowTime.Unix(), ":SUCCESS:", postValues[i].Time)
+		}
+		return nil
+	}
+}
+
+func postHostMetricValuesWithRetry(app *App, postValues []*mkr.HostMetricValue) error {
+	deadline := time.Now().Add(25 * time.Second)
+
+	err := app.API.PostHostMetricValues(postValues)
+	if err == nil {
+		logger.Debugf("Posting metrics succeeded.")
+		return err
+	}
+
+	// If first request did not take so long and it failed on network error, retry once immedeately
+	if time.Now().Before(deadline) && mackerel.IsNetworkError(err) {
+		logger.Warningf("Failed to post metrics value (will retry immediately): %s", err.Error())
+		err = app.API.PostHostMetricValues(postValues)
+		if err == nil {
+			logger.Debugf("Posting metrics recovered.")
+			return nil
+		}
+	}
+	logger.Warningf("Failed to post metrics value (will retry): %s", err.Error())
+	return err
 }
 
 func updateHostSpecsLoop(ctx context.Context, app *App) {
-	/*
-		for {
-			app.UpdateHostSpecs()
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(specsUpdateInterval):
-				// nop
-			}
-		} */
+	for {
+		app.UpdateHostSpecs()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(specsUpdateInterval):
+			// nop
+		}
+	}
 }
 
-func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue, ticker chan time.Time, done chan struct{}) {
+func enqueueLoop_mock(ctx context.Context, app *App, postQueue chan *postValue, ticker chan time.Time, done chan struct{}) {
 	done2 := make(chan struct{})
-	metricsResult := app.Agent.Watch(ctx, ticker, done2)
+	metricsResult := app.Agent.Watch_mock(ctx, ticker, done2)
 	for {
 		select {
 		case <-ctx.Done():
@@ -453,7 +481,22 @@ func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue, ticke
 					Value: 100,
 				},
 			})
-			/*for _, values := range result.Values {
+			fmt.Println("K:", created, ":CREATE:", created)
+			postQueue <- newPostValue(creatingValues)
+		}
+	}
+}
+
+func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue) {
+	metricsResult := app.Agent.Watch(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case result := <-metricsResult:
+			created := result.Created.Unix()
+			var creatingValues []*mkr.HostMetricValue
+			for _, values := range result.Values {
 				hostID := app.Host.ID
 				if values.CustomIdentifier != nil {
 					if host, ok := app.CustomIdentifierHosts[*values.CustomIdentifier]; ok {
@@ -480,9 +523,8 @@ func enqueueLoop(ctx context.Context, app *App, postQueue chan *postValue, ticke
 						},
 					)
 				}
-			} */
-			// logger.Debugf("Enqueuing task to post metrics. %v", time.Unix(created, 0))
-			fmt.Println("K:CREATE:", time.Unix(created, 0))
+			}
+			logger.Debugf("Enqueuing task to post metrics.")
 			postQueue <- newPostValue(creatingValues)
 		}
 	}
@@ -726,22 +768,24 @@ func collectHostParam(conf *config.Config, ameta *AgentMeta) (*mkr.CreateHostPar
 	}, nil
 }
 
+func (app *App) UpdateHostSpecs_mock() {
+}
+
 // UpdateHostSpecs updates the host information that is already registered on Mackerel.
 func (app *App) UpdateHostSpecs() {
 	logger.Debugf("Updating host specs...")
-	/*
-		hostParam, err := collectHostParam(app.Config, app.AgentMeta)
-		if err != nil {
-			logger.Errorf("While collecting host specs: %s", err)
-			return
-		}
+	hostParam, err := collectHostParam(app.Config, app.AgentMeta)
+	if err != nil {
+		logger.Errorf("While collecting host specs: %s", err)
+		return
+	}
 
-		_, err = app.API.UpdateHost(app.Host.ID, (*mkr.UpdateHostParam)(hostParam))
-		if err != nil {
-			logger.Errorf("Error while updating host specs: %s", err)
-		} else {
-			logger.Debugf("Host specs sent.")
-		} */
+	_, err = app.API.UpdateHost(app.Host.ID, (*mkr.UpdateHostParam)(hostParam))
+	if err != nil {
+		logger.Errorf("Error while updating host specs: %s", err)
+	} else {
+		logger.Debugf("Host specs sent.")
+	}
 }
 
 func buildUA(ver, rev string) string {
@@ -769,7 +813,7 @@ func Prepare(conf *config.Config, ameta *AgentMeta) (*App, error) {
 		return nil, fmt.Errorf("failed to prepare an api: %s", err.Error())
 	}
 
-	host, err := prepareHost(conf, ameta, api)
+	host, err := prepareHost_mock(conf, ameta, api)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare host: %s", err.Error())
 	}
@@ -838,6 +882,7 @@ func Run(app *App, termCh chan struct{}) error {
 	err := loop(app, termCh)
 	if err == nil && app.Config.HostStatus.OnStop != "" {
 		// TODO error handling. support retire(?)
+		// 以下はコメントアウトした
 		/*e := app.API.UpdateHostStatus(app.Host.ID, app.Config.HostStatus.OnStop)
 		if e != nil {
 			logger.Errorf("Failed update host status on stop: %s", e)

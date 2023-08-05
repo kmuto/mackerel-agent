@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -11,28 +10,7 @@ import (
 
 var logger = logging.GetLogger("agent")
 
-type testGenerator2 struct{}
-
-func (g *testGenerator2) Generate() (metrics.Values, error) {
-	values := make(map[string]float64)
-	values["test"] = 10
-	return values, nil
-}
-
-func generateValues_mock(generators []metrics.Generator) []*metrics.ValuesCustomIdentifier {
-	tg := &testGenerator2{}
-	generators2 := []metrics.Generator{tg}
-	values := generateValues(generators2)
-
-	result := make(chan []*metrics.ValuesCustomIdentifier)
-	// allValues := []*metrics.ValuesCustomIdentifier{}
-
-	result <- values
-	return <-result
-}
-
 func generateValues(generators []metrics.Generator) []*metrics.ValuesCustomIdentifier {
-	fmt.Println("ここにはこない generateValues")
 	processed := make(chan *metrics.ValuesCustomIdentifier)
 	finish := make(chan struct{})
 	result := make(chan []*metrics.ValuesCustomIdentifier)

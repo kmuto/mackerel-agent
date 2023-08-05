@@ -26,19 +26,18 @@ type MetricsResult struct {
 	Values  []*metrics.ValuesCustomIdentifier
 }
 
+func (agent *Agent) CollectMetrics_mock(collectedTime time.Time) *MetricsResult {
+	return &MetricsResult{Created: collectedTime, Values: nil}
+}
+
 // CollectMetrics collects metrics with generators.
 func (agent *Agent) CollectMetrics(collectedTime time.Time) *MetricsResult {
-	return &MetricsResult{Created: collectedTime, Values: nil}
-	/*
-	   generators := agent.MetricsGenerators
-
-	   	for _, g := range agent.PluginGenerators {
-	   		generators = append(generators, g)
-	   	}
-
-	   values := generateValues_mock(generators)
-	   return &MetricsResult{Created: collectedTime, Values: values}
-	*/
+	generators := agent.MetricsGenerators
+	for _, g := range agent.PluginGenerators {
+		generators = append(generators, g)
+	}
+	values := generateValues(generators)
+	return &MetricsResult{Created: collectedTime, Values: values}
 }
 
 func ticktuck(result chan time.Time, from time.Time, to time.Time, done chan struct{}) {
@@ -50,19 +49,14 @@ func ticktuck(result chan time.Time, from time.Time, to time.Time, done chan str
 	done <- struct{}{}
 }
 
-// Watch XXX
-func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time, done chan struct{}) chan *MetricsResult {
-
+func (agent *Agent) Watch_mock(ctx context.Context, commandTicker chan time.Time, done chan struct{}) chan *MetricsResult {
 	metricsResult := make(chan *MetricsResult)
 	ticker := make(chan time.Time)
 	interval := config.PostMetricsInterval
 
 	go func() {
 		from := time.Date(2023, 7, 28, 03, 33, 0, 0, time.Local)
-		// .Add(time.Second * 1)
-		//to := time.Date(2023, 7, 28, 18, 0, 0, 0, time.Local)
-		to := time.Date(2023, 7, 28, 03, 40, 0, 0, time.Local)
-		//t := time.NewTicker(1 * time.Second)
+		to := time.Date(2023, 7, 28, 19, 0, 0, 0, time.Local)
 		t := make(chan time.Time, 1)
 		go ticktuck(t, from, to, done)
 
@@ -81,18 +75,10 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time, don
 				return
 			case ti := <-t:
 				commandTicker <- ti
-				// fmt.Println("HOGE2", ti, ":", ti.Second()%int(interval.Seconds()))
-				// Fire an event at 0 second per minute.
-				// Because ticks may not be accurate,
-				// fire an event if t - last is more than 1 minute
 				if ti.Second()%int(interval.Seconds()) == 0 || ti.After(last.Add(interval)) {
-					// Non-blocking send of time.
-					// If `collectMetrics` runs with max concurrency, we drop ticks.
-					// Because the time is used as agent.MetricsResult.Created.
 					select {
 					case ticker <- ti:
 						last = ti
-						// fmt.Println("KENSHI:last", last)
 					default:
 					}
 				}
@@ -111,11 +97,67 @@ func (agent *Agent) Watch(ctx context.Context, commandTicker chan time.Time, don
 			// fmt.Println("HOGE3", ti)
 			sem <- struct{}{}
 			go func() {
-				metricsResult <- agent.CollectMetrics(ti)
+				metricsResult <- agent.CollectMetrics_mock(ti)
 				<-sem
 			}()
 		}
 	}(ticker)
+
+	return metricsResult
+}
+
+// Watch XXX
+func (agent *Agent) Watch(ctx context.Context) chan *MetricsResult {
+
+	metricsResult := make(chan *MetricsResult)
+	ticker := make(chan time.Time)
+	interval := config.PostMetricsInterval
+
+	go func() {
+		t := time.NewTicker(1 * time.Second)
+
+		last := time.Now()
+		ticker <- last // sends tick once at first
+
+		for {
+			select {
+			case <-ctx.Done():
+				close(ticker)
+				t.Stop()
+				return
+			case t := <-t.C:
+				// Fire an event at 0 second per minute.
+				// Because ticks may not be accurate,
+				// fire an event if t - last is more than 1 minute
+				if t.Second()%int(interval.Seconds()) == 0 || t.After(last.Add(interval)) {
+					// Non-blocking send of time.
+					// If `collectMetrics` runs with max concurrency, we drop ticks.
+					// Because the time is used as agent.MetricsResult.Created.
+					select {
+					case ticker <- t:
+						last = t
+					default:
+					}
+				}
+			}
+		}
+	}()
+
+	const collectMetricsWorkerMax = 3
+
+	go func() {
+		// Start collectMetrics concurrently
+		// so that it does not prevent running next collectMetrics.
+		sem := make(chan struct{}, collectMetricsWorkerMax)
+		for tickedTime := range ticker {
+			ti := tickedTime
+			sem <- struct{}{}
+			go func() {
+				metricsResult <- agent.CollectMetrics(ti)
+				<-sem
+			}()
+		}
+	}()
 
 	return metricsResult
 }
