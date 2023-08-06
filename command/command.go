@@ -361,18 +361,32 @@ func loop(app *App, termCh chan struct{}) error {
 			logger.Debugf("Sleep %d seconds before posting.", delaySeconds)
 			delayedTime := (<-ticker).Add(time.Duration(delaySeconds) * time.Second)
 
-			select {
-			// case <-time.After(time.Duration(delaySeconds) * time.Second):
-			// nop
-			case t := <-ticker:
-				if t.Equal(delayedTime) || t.After(delayedTime) {
-					break
+			err2 := func() error {
+				for {
+					select {
+					// case <-time.After(time.Duration(delaySeconds) * time.Second):
+					// nop
+					case t := <-ticker:
+						if t.Equal(delayedTime) || t.After(delayedTime) {
+							return nil // 待ち時間に逹したので抜ける
+						} else {
+						}
+					case <-termMetricsCh:
+						if lState == loopStateTerminating {
+							return fmt.Errorf("received terminate instruction again. force return")
+						}
+						lState = loopStateTerminating
+						return nil
+					case <-done:
+						lState = loopStateTerminating
+						// ここまずそうな気はする
+						return nil
+					}
 				}
-			case <-termMetricsCh:
-				if lState == loopStateTerminating {
-					return fmt.Errorf("received terminate instruction again. force return")
-				}
-				lState = loopStateTerminating
+			}()
+			if err2 != nil {
+				// || lState == loopStateTerminating {
+				return err2
 			}
 
 			var postValues []*mkr.HostMetricValue
@@ -384,6 +398,7 @@ func loop(app *App, termCh chan struct{}) error {
 				if lState != loopStateTerminating {
 					lState = loopStateHadError
 				}
+				// FIXME: ここ時間無視した並行処理でまずそうな気がする
 				go func() {
 					for _, v := range origPostValues {
 						v.retryCnt++
@@ -407,6 +422,14 @@ func loop(app *App, termCh chan struct{}) error {
 			}
 
 			if lState == loopStateTerminating && len(postQueue) <= 0 {
+				return nil
+			}
+			if lState == loopStateTerminating {
+				// 強制的に終わらせる
+				close(postQueue)
+				for v := range postQueue {
+					fmt.Println("K:", nowTime.Unix(), ":REMAIN:", v.values[0].Time)
+				}
 				return nil
 			}
 		}
