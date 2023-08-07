@@ -120,7 +120,7 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 
 	metricsResult := make(chan *MetricsResult)
 	ticker := make(chan time.Time)
-	interval := config.PostMetricsInterval
+	// interval := config.PostMetricsInterval
 
 	from, err := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimFrom)
 	if err != nil {
@@ -158,7 +158,8 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 					return
 				}
 				// FIXME: %がうまくいかないはず
-				if ti.UnixMilli()%int64(interval.Milliseconds()) == 0 || ti.After(last.Add(interval)) {
+				//if ti.UnixMilli()%int64(interval.Milliseconds()) == 0 || ti.After(last.Add(interval)) {
+				if ti.UnixMilli()%int64(60) == 0 || ti.After(last.Add(60*time.Millisecond)) {
 					// Non-blocking send of time.
 					// If `collectMetrics` runs with max concurrency, we drop ticks.
 					// Because the time is used as agent.MetricsResult.Created.
