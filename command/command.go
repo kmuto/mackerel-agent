@@ -23,7 +23,9 @@ import (
 )
 
 var logger = logging.GetLogger("command")
-var metricsInterval = 60 * time.Second
+
+// var metricsInterval = 60 * time.Second
+var metricsInterval = 60 * time.Millisecond
 
 var retryNum uint = 20
 var retryInterval = 3 * time.Second
@@ -213,7 +215,6 @@ const (
 
 // ここにいろいろ仕込んだ(kmuto)
 func loop(app *App, termCh chan struct{}) error {
-	ticker := make(chan time.Time, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -223,30 +224,18 @@ func loop(app *App, termCh chan struct{}) error {
 
 	postQueue := make(chan *postValue, postMetricsBufferSize)
 	done := make(chan struct{})
-	go enqueueLoop_mock(ctx, app, postQueue, ticker, done)
+	go enqueueLoop_clockup(ctx, app, postQueue, done)
 
 	postDelaySeconds := delayByHost(app.Host)
 	initialDelay := postDelaySeconds / 2
 	logger.Debugf("wait %d seconds before initial posting.", initialDelay)
 
-	var delayedTime time.Time
-	flag := false
 	select {
 	case <-termCh:
 		return nil
-	case t := <-ticker:
-		if !flag {
-			// delayedTime = t.Add(time.Duration(initialDelay) * time.Second)
-			flag = true
-			// fmt.Println("K:", t, ":INITIALDELAY:")
-		} else {
-			if t.Equal(delayedTime) || t.After(delayedTime) {
-				break
-			}
-		}
+	case <-time.After(time.Duration(initialDelay) * time.Millisecond):
+		// app.Agent.InitPluginGenerators(app.API)
 	}
-	//logger.Infof("start at %v", delayedTime)
-	// fmt.Println("K:", delayedTime, ":START:", delayedTime)
 
 	termMetricsCh := make(chan struct{})
 	var termCheckerCh chan struct{}
@@ -284,12 +273,11 @@ func loop(app *App, termCh chan struct{}) error {
 	}
 
 	lState := loopStateFirst
-	nowTime := <-ticker
+	realStartTime := time.Now()
+	fmt.Println("K:", realStartTime.UnixMilli(), ":START:")
 
 	for {
 		select {
-		case t := <-ticker:
-			nowTime = t
 		case <-termMetricsCh:
 			if lState == loopStateTerminating {
 				return fmt.Errorf("received terminate instruction again. force return")
@@ -299,13 +287,10 @@ func loop(app *App, termCh chan struct{}) error {
 				return nil
 			}
 		case <-done:
-			if len(postQueue) > 0 {
-				close(postQueue)
-				for v := range postQueue {
-					fmt.Println("K:", nowTime.Unix(), ":REMAIN:", v.values[0].Time)
-				}
+			lState = loopStateTerminating
+			if len(postQueue) <= 0 {
+				return nil
 			}
-			termCh <- struct{}{}
 		case v := <-postQueue:
 			origPostValues := [](*postValue){v}
 			if len(postQueue) > 0 {
@@ -313,7 +298,7 @@ func loop(app *App, termCh chan struct{}) error {
 				logger.Debugf("Merging datapoints with next queued ones")
 				nextValues := <-postQueue
 				origPostValues = append(origPostValues, nextValues)
-				fmt.Println("K:", nowTime.Unix(), ":BULKMODE:", origPostValues[0].values[0].Time, origPostValues[1].values[0].Time)
+				fmt.Println("K:", time.Now().UnixMilli(), ":BULKMODE:", origPostValues[0].values[0].Time, origPostValues[1].values[0].Time)
 			}
 
 			delaySeconds := 0
@@ -334,7 +319,7 @@ func loop(app *App, termCh chan struct{}) error {
 				// which is specific to the ID of the host running agent on.
 				// The sleep second is up to 60s (to be exact up to `config.Postmetricsinterval.Seconds()`.
 				// elapsedSeconds := int(time.Now().Unix() % int64(config.PostMetricsInterval.Seconds()))
-				elapsedSeconds := int(nowTime.Unix() % int64(config.PostMetricsInterval.Seconds()))
+				elapsedSeconds := int(time.Now().UnixMilli() % int64(config.PostMetricsInterval.Milliseconds()))
 				if postDelaySeconds > elapsedSeconds {
 					delaySeconds = postDelaySeconds - elapsedSeconds
 				}
@@ -349,64 +334,39 @@ func loop(app *App, termCh chan struct{}) error {
 				}
 			}
 
-			select {
-			case <-ticker:
-			case <-done:
-				close(postQueue)
-				for v := range postQueue {
-					fmt.Println("K:", nowTime.Unix(), ":REMAIN:", v.values[0].Time)
-				}
-				return nil
-			}
 			logger.Debugf("Sleep %d seconds before posting.", delaySeconds)
-			delayedTime := (<-ticker).Add(time.Duration(delaySeconds) * time.Second)
-
-			err2 := func() error {
-				for {
-					select {
-					// case <-time.After(time.Duration(delaySeconds) * time.Second):
-					// nop
-					case t := <-ticker:
-						if t.Equal(delayedTime) || t.After(delayedTime) {
-							return nil // 待ち時間に逹したので抜ける
-						} else {
-						}
-					case <-termMetricsCh:
-						if lState == loopStateTerminating {
-							return fmt.Errorf("received terminate instruction again. force return")
-						}
-						lState = loopStateTerminating
-						return nil
-					case <-done:
-						lState = loopStateTerminating
-						// ここまずそうな気はする
-						return nil
-					}
+			select {
+			case <-time.After(time.Duration(delaySeconds) * time.Millisecond):
+				// nop
+			case <-termMetricsCh:
+				if lState == loopStateTerminating {
+					return fmt.Errorf("received terminate instruction again. force return")
 				}
-			}()
-			if err2 != nil {
-				// || lState == loopStateTerminating {
-				return err2
+				lState = loopStateTerminating
+			case <-done:
+				if lState == loopStateTerminating {
+					return fmt.Errorf("received terminate instruction again. force return")
+				}
+				lState = loopStateTerminating
 			}
 
 			var postValues []*mkr.HostMetricValue
 			for _, v := range origPostValues {
 				postValues = append(postValues, v.values...)
 			}
-			err := postHostMetricValuesWithRetry_mock(app, postValues, nowTime)
+			err := postHostMetricValuesWithRetry_clockup(realStartTime, app, postValues)
 			if err != nil {
 				if lState != loopStateTerminating {
 					lState = loopStateHadError
 				}
-				// FIXME: ここ時間無視した並行処理でまずそうな気がする
 				go func() {
 					for _, v := range origPostValues {
 						v.retryCnt++
-						fmt.Println("K:", nowTime.Unix(), ":REQUEUE(", v.retryCnt, "):", v.values[0].Time)
+						fmt.Println("K:", time.Now().UnixMilli(), ":REQUEUE(", v.retryCnt, "):", v.values[0].Time)
 						// It is difficult to distinguish the error is server error or data error.
 						// So, if retryCnt exceeded the configured limit, postValue is considered invalid and abandoned.
 						if v.retryCnt > postMetricsRetryMax {
-							fmt.Println("K:", nowTime.Unix(), ":LOST:", v.values[0].Time)
+							fmt.Println("K:", time.Now().UnixMilli(), ":LOST:", v.values[0].Time)
 							/* json, err := json.Marshal(v.values)
 							if err != nil {
 								logger.Errorf("Something wrong with post values. marshaling failed.")
@@ -428,7 +388,7 @@ func loop(app *App, termCh chan struct{}) error {
 				// 強制的に終わらせる
 				close(postQueue)
 				for v := range postQueue {
-					fmt.Println("K:", nowTime.Unix(), ":REMAIN:", v.values[0].Time)
+					fmt.Println("K:", time.Now().UnixMilli(), ":REMAIN:", v.values[0].Time)
 				}
 				return nil
 			}
@@ -472,6 +432,59 @@ func postHostMetricValuesWithRetry_mock(app *App, postValues []*mkr.HostMetricVa
 	} else {
 		for _, postValue := range postValues {
 			fmt.Println("K:", nowTime.Unix(), ":SUCCESS:", postValue.Time)
+		}
+		return nil
+	}
+}
+
+func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, postValues []*mkr.HostMetricValue) error {
+	deadline := time.Now().Add(25 * time.Millisecond)
+
+	startTime, err := time.Parse("2006-01-02T15:04:05Z07:00", app.Config.SimFrom)
+	if err != nil {
+		logger.Errorf("from format error %v", err)
+		return errors.New("time format error")
+	}
+
+	isDowntime := false
+	for _, Down := range app.Config.SimDowns {
+		from, err := time.Parse("2006-01-02T15:04:05Z07:00", Down[0])
+		if err != nil {
+			logger.Errorf("down from format error %v", err)
+			return errors.New("time format error")
+		}
+		to, err := time.Parse("2006-01-02T15:04:05Z07:00", Down[1])
+		if err != nil {
+			logger.Errorf("down to format error %v", err)
+			return errors.New("time format error")
+		}
+		realFromTime := realStartTime.Add(time.Duration(from.Unix()-startTime.Unix()) * time.Millisecond)
+		realToTime := realStartTime.Add(time.Duration(to.Unix()-startTime.Unix()) * time.Millisecond)
+		if (realFromTime.Equal(time.Now()) || realFromTime.Before(time.Now())) && realToTime.After(time.Now()) {
+			isDowntime = true
+		}
+	}
+
+	if isDowntime {
+		// 障害タイム
+		for _, postValue := range postValues {
+			fmt.Println("K:", time.Now().UnixMilli(), ":FAILED:", postValue.Time)
+		}
+		// 絶対に失敗するが25秒待って再送
+		select {
+		case <-time.After(time.Duration(25 * time.Millisecond)):
+			// nop
+		}
+		if time.Now().Before(deadline) {
+			for _, postValue := range postValues {
+				fmt.Println("K:", time.Now().UnixMilli(), ":RETRYFAILED:", postValue.Time)
+			}
+		}
+		err := errors.New("network connection problem")
+		return err
+	} else {
+		for _, postValue := range postValues {
+			fmt.Println("K:", time.Now().UnixMilli(), ":SUCCESS:", postValue.Time)
 		}
 		return nil
 	}
@@ -527,6 +540,36 @@ func enqueueLoop_mock(ctx context.Context, app *App, postQueue chan *postValue, 
 			return
 		case result := <-metricsResult:
 			created := result.Created.Unix()
+			var creatingValues []*mkr.HostMetricValue
+			creatingValues = append(creatingValues, &mkr.HostMetricValue{
+				HostID: "9rxGOHfVF8F",
+				MetricValue: &mkr.MetricValue{
+					Name:  "custom.test1",
+					Time:  created,
+					Value: 100,
+				},
+			})
+			fmt.Println("K:", created, ":CREATE:", created)
+			postQueue <- newPostValue(creatingValues)
+		}
+	}
+}
+
+func enqueueLoop_clockup(ctx context.Context, app *App, postQueue chan *postValue, done chan struct{}) {
+	done2 := make(chan struct{})
+	metricsResult, err := app.Agent.Watch_clockup(app.Config, ctx, done2)
+	if err != nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done2:
+			done <- struct{}{}
+			return
+		case result := <-metricsResult:
+			created := result.Created.UnixMilli()
 			var creatingValues []*mkr.HostMetricValue
 			creatingValues = append(creatingValues, &mkr.HostMetricValue{
 				HostID: "9rxGOHfVF8F",

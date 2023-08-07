@@ -116,6 +116,82 @@ func (agent *Agent) Watch_mock(conf *config.Config, ctx context.Context, command
 }
 
 // Watch XXX
+func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done chan struct{}) (chan *MetricsResult, error) {
+
+	metricsResult := make(chan *MetricsResult)
+	ticker := make(chan time.Time)
+	interval := config.PostMetricsInterval
+
+	from, err := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimFrom)
+	if err != nil {
+		logger.Errorf("from format error %v", err)
+		return nil, errors.New("time format error")
+	}
+	to, err := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimTo)
+	if err != nil {
+		logger.Errorf("to format error %v", err)
+		return nil, errors.New("time format error")
+	}
+	finishTime := time.Duration(to.Unix()-from.Unix()) * time.Millisecond
+
+	go func() {
+		t := time.NewTicker(1 * time.Millisecond)
+
+		last := time.Now()
+		stopAt := last.Add(finishTime)
+		ticker <- last // sends tick once at first
+
+		for {
+			select {
+			case <-ctx.Done():
+				close(ticker)
+				t.Stop()
+				return
+			case ti := <-t.C:
+				// Fire an event at 0 second per minute.
+				// Because ticks may not be accurate,
+				// fire an event if t - last is more than 1 minute
+				if ti.Equal(stopAt) || ti.After(stopAt) {
+					close(ticker)
+					t.Stop()
+					done <- struct{}{}
+					return
+				}
+				// FIXME: %がうまくいかないはず
+				if ti.UnixMilli()%int64(interval.Milliseconds()) == 0 || ti.After(last.Add(interval)) {
+					// Non-blocking send of time.
+					// If `collectMetrics` runs with max concurrency, we drop ticks.
+					// Because the time is used as agent.MetricsResult.Created.
+					select {
+					case ticker <- ti:
+						last = ti
+					default:
+					}
+				}
+			}
+		}
+	}()
+
+	const collectMetricsWorkerMax = 3
+
+	go func() {
+		// Start collectMetrics concurrently
+		// so that it does not prevent running next collectMetrics.
+		sem := make(chan struct{}, collectMetricsWorkerMax)
+		for tickedTime := range ticker {
+			ti := tickedTime
+			sem <- struct{}{}
+			go func() {
+				metricsResult <- agent.CollectMetrics(ti)
+				<-sem
+			}()
+		}
+	}()
+
+	return metricsResult, nil
+}
+
+// Watch XXX
 func (agent *Agent) Watch(ctx context.Context) chan *MetricsResult {
 
 	metricsResult := make(chan *MetricsResult)
