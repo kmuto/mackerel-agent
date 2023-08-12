@@ -48,7 +48,7 @@ func (agent *Agent) FromTo(conf *config.Config) (time.Time, time.Time) {
 func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done chan struct{}) (chan *MetricsResult, error) {
 	metricsResult := make(chan *MetricsResult)
 	ticker := make(chan time.Time)
-	// interval := config.PostMetricsInterval
+	interval := config.PostMetricsInterval
 
 	_, to := agent.FromTo(conf)
 
@@ -75,7 +75,7 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 					return
 				}
 				now := timejump.Now()
-				if now.Second()%60 == 0 || now.After(last.Add(60*time.Second)) {
+				if now.Second()%int(interval.Seconds()) == 0 || now.After(last.Add(interval)) {
 					// Non-blocking send of time.
 					// If `collectMetrics` runs with max concurrency, we drop ticks.
 					// Because the time is used as agent.MetricsResult.Created.

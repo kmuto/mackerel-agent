@@ -429,7 +429,7 @@ func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, po
 		for _, postValue := range postValues {
 			fmt.Println("K:", timejump.Now().Unix(), ":FAILED:", postValue.Time)
 		}
-		// 絶対に失敗するが25秒待って再送
+		// 絶対に失敗するが20秒待って再送
 		select {
 		case <-time.After(time.Duration(20 * time.Millisecond)):
 			// nop
@@ -444,6 +444,7 @@ func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, po
 	} else {
 		for _, postValue := range postValues {
 			fmt.Println("K:", timejump.Now().Unix(), ":SUCCESS:", postValue.Time)
+			// そもそもMackerelは古い日付のメトリックをいつまで許容する？
 		}
 		return nil
 	}
