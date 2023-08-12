@@ -3,6 +3,7 @@ require 'time'
 
 array = []
 ARGF.each do |l|
+  next if l.match?('START')
   v = l.chomp.split(/\s*:\s*/)
   # v[1]: 動作時刻
   # v[2]: 作業内容
