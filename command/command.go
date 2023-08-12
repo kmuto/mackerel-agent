@@ -444,7 +444,7 @@ func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, po
 	} else {
 		for _, postValue := range postValues {
 			fmt.Println("K:", timejump.Now().Unix(), ":SUCCESS:", postValue.Time)
-			// そもそもMackerelは古い日付のメトリックをいつまで許容する？
+			// XXX: Mackerelは実際には24h以上は受け付けるが無視する
 		}
 		return nil
 	}
