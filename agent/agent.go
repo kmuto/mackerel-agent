@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/agatan/timejump"
@@ -28,10 +27,6 @@ type MetricsResult struct {
 	Values  []*metrics.ValuesCustomIdentifier
 }
 
-func (agent *Agent) CollectMetrics_mock(collectedTime time.Time) *MetricsResult {
-	return &MetricsResult{Created: collectedTime, Values: nil}
-}
-
 // CollectMetrics collects metrics with generators.
 func (agent *Agent) CollectMetrics(collectedTime time.Time) *MetricsResult {
 	generators := agent.MetricsGenerators
@@ -40,80 +35,6 @@ func (agent *Agent) CollectMetrics(collectedTime time.Time) *MetricsResult {
 	}
 	values := generateValues(generators)
 	return &MetricsResult{Created: collectedTime, Values: values}
-}
-
-func ticktuck(result chan time.Time, from time.Time, to time.Time, done chan struct{}) {
-	from_t := from.Unix()
-	to_t := to.Unix()
-	for t := from_t; t < to_t; t++ {
-		result <- time.Unix(t, 0)
-	}
-	done <- struct{}{}
-}
-
-func (agent *Agent) Watch_mock(conf *config.Config, ctx context.Context, commandTicker chan time.Time, done chan struct{}) (chan *MetricsResult, error) {
-	metricsResult := make(chan *MetricsResult)
-	ticker := make(chan time.Time)
-	interval := config.PostMetricsInterval
-
-	from, err := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimFrom)
-	if err != nil {
-		logger.Errorf("from format error %v", err)
-		return nil, errors.New("time format error")
-	}
-	to, err := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimTo)
-	if err != nil {
-		logger.Errorf("to format error %v", err)
-		return nil, errors.New("time format error")
-	}
-
-	go func() {
-		t := make(chan time.Time, 1)
-		go ticktuck(t, from, to, done)
-
-		last := from
-		ticker <- last // sends tick once at first
-
-		for {
-			select {
-			case <-ctx.Done():
-				close(ticker)
-				close(t)
-				return
-			case <-done:
-				close(ticker)
-				close(t)
-				return
-			case ti := <-t:
-				commandTicker <- ti
-				if ti.Second()%int(interval.Seconds()) == 0 || ti.After(last.Add(interval)) {
-					select {
-					case ticker <- ti:
-						last = ti
-					default:
-					}
-				}
-			}
-		}
-	}()
-
-	const collectMetricsWorkerMax = 3
-
-	go func(ticker chan time.Time) {
-		// Start collectMetrics concurrently
-		// so that it does not prevent running next collectMetrics.
-		sem := make(chan struct{}, collectMetricsWorkerMax)
-		for tickedTime := range ticker {
-			ti := tickedTime
-			sem <- struct{}{}
-			go func() {
-				metricsResult <- agent.CollectMetrics_mock(ti)
-				<-sem
-			}()
-		}
-	}(ticker)
-
-	return metricsResult, nil
 }
 
 func (agent *Agent) FromTo(conf *config.Config) (time.Time, time.Time) {
@@ -129,15 +50,9 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 	ticker := make(chan time.Time)
 	// interval := config.PostMetricsInterval
 
-	from, to := agent.FromTo(conf)
+	_, to := agent.FromTo(conf)
 
 	go func() {
-		// FIXME:開始時刻をcommandと合わせるには？
-		timejump.Activate()
-		defer timejump.Deactivate()
-		timejump.Scale(1000)
-		timejump.Jump(from)
-
 		t := time.NewTicker(1 * time.Millisecond) // 1 second->millisecond
 		last := timejump.Now()
 		ticker <- last // sends tick once at first

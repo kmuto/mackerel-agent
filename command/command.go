@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Songmu/retry"
+	"github.com/agatan/timejump"
 	"github.com/mackerelio/golib/logging"
 	"github.com/mackerelio/mackerel-agent/agent"
 	"github.com/mackerelio/mackerel-agent/checks"
@@ -218,6 +219,12 @@ func loop(app *App, termCh chan struct{}) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	from, _ := app.Agent.FromTo(app.Config)
+	timejump.Activate()
+	defer timejump.Deactivate()
+	timejump.Scale(1000)
+	timejump.Jump(from)
+
 	// 省略した
 	// Periodically update host specs.
 	// go updateHostSpecsLoop(ctx, app)
@@ -273,8 +280,7 @@ func loop(app *App, termCh chan struct{}) error {
 	}
 
 	lState := loopStateFirst
-	realStartTime := time.Now()
-	fmt.Println("K:", realStartTime.UnixMilli(), ":START:")
+	fmt.Println("K:", timejump.Now().Unix(), ":START:")
 
 	for {
 		select {
@@ -298,7 +304,7 @@ func loop(app *App, termCh chan struct{}) error {
 				logger.Debugf("Merging datapoints with next queued ones")
 				nextValues := <-postQueue
 				origPostValues = append(origPostValues, nextValues)
-				fmt.Println("K:", time.Now().UnixMilli(), ":BULKMODE:", origPostValues[0].values[0].Time, origPostValues[1].values[0].Time)
+				fmt.Println("K:", timejump.Now().Unix(), ":BULKMODE:", origPostValues[0].values[0].Time, origPostValues[1].values[0].Time)
 			}
 
 			delaySeconds := 0
@@ -319,7 +325,7 @@ func loop(app *App, termCh chan struct{}) error {
 				// which is specific to the ID of the host running agent on.
 				// The sleep second is up to 60s (to be exact up to `config.Postmetricsinterval.Seconds()`.
 				// elapsedSeconds := int(time.Now().Unix() % int64(config.PostMetricsInterval.Seconds()))
-				elapsedSeconds := int(time.Now().UnixMilli() % int64(config.PostMetricsInterval.Milliseconds()))
+				elapsedSeconds := int(timejump.Now().Unix() % int64(config.PostMetricsInterval.Milliseconds()))
 				if postDelaySeconds > elapsedSeconds {
 					delaySeconds = postDelaySeconds - elapsedSeconds
 				}
@@ -354,7 +360,7 @@ func loop(app *App, termCh chan struct{}) error {
 			for _, v := range origPostValues {
 				postValues = append(postValues, v.values...)
 			}
-			err := postHostMetricValuesWithRetry_clockup(realStartTime, app, postValues)
+			err := postHostMetricValuesWithRetry_clockup(timejump.Now(), app, postValues)
 			if err != nil {
 				if lState != loopStateTerminating {
 					lState = loopStateHadError
@@ -362,11 +368,11 @@ func loop(app *App, termCh chan struct{}) error {
 				go func() {
 					for _, v := range origPostValues {
 						v.retryCnt++
-						fmt.Println("K:", time.Now().UnixMilli(), ":REQUEUE(", v.retryCnt, "):", v.values[0].Time)
+						fmt.Println("K:", timejump.Now().Unix(), ":REQUEUE(", v.retryCnt, "):", v.values[0].Time)
 						// It is difficult to distinguish the error is server error or data error.
 						// So, if retryCnt exceeded the configured limit, postValue is considered invalid and abandoned.
 						if v.retryCnt > postMetricsRetryMax {
-							fmt.Println("K:", time.Now().UnixMilli(), ":LOST:", v.values[0].Time)
+							fmt.Println("K:", timejump.Now().Unix(), ":LOST:", v.values[0].Time)
 							/* json, err := json.Marshal(v.values)
 							if err != nil {
 								logger.Errorf("Something wrong with post values. marshaling failed.")
@@ -388,7 +394,7 @@ func loop(app *App, termCh chan struct{}) error {
 				// 強制的に終わらせる
 				close(postQueue)
 				for v := range postQueue {
-					fmt.Println("K:", time.Now().UnixMilli(), ":REMAIN:", v.values[0].Time)
+					fmt.Println("K:", timejump.Now().Unix(), ":REMAIN:", v.values[0].Time)
 				}
 				return nil
 			}
@@ -396,8 +402,8 @@ func loop(app *App, termCh chan struct{}) error {
 	}
 }
 
-func postHostMetricValuesWithRetry_mock(app *App, postValues []*mkr.HostMetricValue, nowTime time.Time) error {
-	deadline := nowTime.Add(25 * time.Second)
+func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, postValues []*mkr.HostMetricValue) error {
+	deadline := timejump.Now().Add(25 * time.Second)
 
 	isDowntime := false
 	for _, Down := range app.Config.SimDowns {
@@ -411,6 +417,8 @@ func postHostMetricValuesWithRetry_mock(app *App, postValues []*mkr.HostMetricVa
 			logger.Errorf("down to format error %v", err)
 			return errors.New("time format error")
 		}
+
+		nowTime := timejump.Now()
 		if (from.Equal(nowTime) || from.Before(nowTime)) && to.After(nowTime) {
 			isDowntime = true
 		}
@@ -419,72 +427,23 @@ func postHostMetricValuesWithRetry_mock(app *App, postValues []*mkr.HostMetricVa
 	if isDowntime {
 		// 障害タイム
 		for _, postValue := range postValues {
-			fmt.Println("K:", nowTime.Unix(), ":FAILED:", postValue.Time)
-		}
-		// 絶対に失敗するが再送
-		if nowTime.Before(deadline) {
-			for _, postValue := range postValues {
-				fmt.Println("K:", nowTime.Unix(), ":RETRYFAILED:", postValue.Time)
-			}
-		}
-		err := errors.New("network connection problem")
-		return err
-	} else {
-		for _, postValue := range postValues {
-			fmt.Println("K:", nowTime.Unix(), ":SUCCESS:", postValue.Time)
-		}
-		return nil
-	}
-}
-
-func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, postValues []*mkr.HostMetricValue) error {
-	deadline := time.Now().Add(25 * time.Millisecond)
-
-	startTime, err := time.Parse("2006-01-02T15:04:05Z07:00", app.Config.SimFrom)
-	if err != nil {
-		logger.Errorf("from format error %v", err)
-		return errors.New("time format error")
-	}
-
-	isDowntime := false
-	for _, Down := range app.Config.SimDowns {
-		from, err := time.Parse("2006-01-02T15:04:05Z07:00", Down[0])
-		if err != nil {
-			logger.Errorf("down from format error %v", err)
-			return errors.New("time format error")
-		}
-		to, err := time.Parse("2006-01-02T15:04:05Z07:00", Down[1])
-		if err != nil {
-			logger.Errorf("down to format error %v", err)
-			return errors.New("time format error")
-		}
-		realFromTime := realStartTime.Add(time.Duration(from.Unix()-startTime.Unix()) * time.Millisecond)
-		realToTime := realStartTime.Add(time.Duration(to.Unix()-startTime.Unix()) * time.Millisecond)
-		if (realFromTime.Equal(time.Now()) || realFromTime.Before(time.Now())) && realToTime.After(time.Now()) {
-			isDowntime = true
-		}
-	}
-
-	if isDowntime {
-		// 障害タイム
-		for _, postValue := range postValues {
-			fmt.Println("K:", time.Now().UnixMilli(), ":FAILED:", postValue.Time)
+			fmt.Println("K:", timejump.Now().Unix(), ":FAILED:", postValue.Time)
 		}
 		// 絶対に失敗するが25秒待って再送
 		select {
-		case <-time.After(time.Duration(25 * time.Millisecond)):
+		case <-time.After(time.Duration(20 * time.Millisecond)):
 			// nop
 		}
-		if time.Now().Before(deadline) {
+		if timejump.Now().Before(deadline) {
 			for _, postValue := range postValues {
-				fmt.Println("K:", time.Now().UnixMilli(), ":RETRYFAILED:", postValue.Time)
+				fmt.Println("K:", timejump.Now().Unix(), ":RETRYFAILED:", postValue.Time)
 			}
 		}
 		err := errors.New("network connection problem")
 		return err
 	} else {
 		for _, postValue := range postValues {
-			fmt.Println("K:", time.Now().UnixMilli(), ":SUCCESS:", postValue.Time)
+			fmt.Println("K:", timejump.Now().Unix(), ":SUCCESS:", postValue.Time)
 		}
 		return nil
 	}
@@ -524,37 +483,6 @@ func updateHostSpecsLoop(ctx context.Context, app *App) {
 	}
 }
 
-func enqueueLoop_mock(ctx context.Context, app *App, postQueue chan *postValue, ticker chan time.Time, done chan struct{}) {
-	done2 := make(chan struct{})
-	metricsResult, err := app.Agent.Watch_mock(app.Config, ctx, ticker, done2)
-	if err != nil {
-		done <- struct{}{}
-		return
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-done2:
-			done <- struct{}{}
-			return
-		case result := <-metricsResult:
-			created := result.Created.Unix()
-			var creatingValues []*mkr.HostMetricValue
-			creatingValues = append(creatingValues, &mkr.HostMetricValue{
-				HostID: "9rxGOHfVF8F",
-				MetricValue: &mkr.MetricValue{
-					Name:  "custom.test1",
-					Time:  created,
-					Value: 100,
-				},
-			})
-			fmt.Println("K:", created, ":CREATE:", created)
-			postQueue <- newPostValue(creatingValues)
-		}
-	}
-}
-
 func enqueueLoop_clockup(ctx context.Context, app *App, postQueue chan *postValue, done chan struct{}) {
 	done2 := make(chan struct{})
 	metricsResult, err := app.Agent.Watch_clockup(app.Config, ctx, done2)
@@ -569,7 +497,7 @@ func enqueueLoop_clockup(ctx context.Context, app *App, postQueue chan *postValu
 			done <- struct{}{}
 			return
 		case result := <-metricsResult:
-			created := result.Created.UnixMilli()
+			created := result.Created.Unix()
 			var creatingValues []*mkr.HostMetricValue
 			creatingValues = append(creatingValues, &mkr.HostMetricValue{
 				HostID: "9rxGOHfVF8F",
