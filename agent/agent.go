@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/agatan/timejump"
@@ -117,31 +116,29 @@ func (agent *Agent) Watch_mock(conf *config.Config, ctx context.Context, command
 	return metricsResult, nil
 }
 
+func (agent *Agent) FromTo(conf *config.Config) (time.Time, time.Time) {
+	// 雑にエラーは握り潰している
+	from, _ := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimFrom)
+	to, _ := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimTo)
+	return from, to
+}
+
 // Watch XXX
 func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done chan struct{}) (chan *MetricsResult, error) {
 	metricsResult := make(chan *MetricsResult)
 	ticker := make(chan time.Time)
 	// interval := config.PostMetricsInterval
 
-	from, err := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimFrom)
-	if err != nil {
-		logger.Errorf("from format error %v", err)
-		return nil, errors.New("time format error")
-	}
-	to, err := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimTo)
-	if err != nil {
-		logger.Errorf("to format error %v", err)
-		return nil, errors.New("time format error")
-	}
+	from, to := agent.FromTo(conf)
 
 	go func() {
+		// FIXME:開始時刻をcommandと合わせるには？
 		timejump.Activate()
 		defer timejump.Deactivate()
 		timejump.Scale(1000)
 		timejump.Jump(from)
 
 		t := time.NewTicker(1 * time.Millisecond) // 1 second->millisecond
-
 		last := timejump.Now()
 		ticker <- last // sends tick once at first
 
@@ -187,7 +184,6 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 			ti := tickedTime
 			sem <- struct{}{}
 			go func() {
-				fmt.Println(ti)
 				metricsResult <- agent.CollectMetrics(ti)
 				<-sem
 			}()
