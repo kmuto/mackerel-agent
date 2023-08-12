@@ -25,7 +25,7 @@ import (
 
 var logger = logging.GetLogger("command")
 
-// var metricsInterval = 60 * time.Second
+// secondからmsに変更
 var metricsInterval = 60 * time.Millisecond
 
 var retryNum uint = 20
@@ -325,7 +325,7 @@ func loop(app *App, termCh chan struct{}) error {
 				// which is specific to the ID of the host running agent on.
 				// The sleep second is up to 60s (to be exact up to `config.Postmetricsinterval.Seconds()`.
 				// elapsedSeconds := int(time.Now().Unix() % int64(config.PostMetricsInterval.Seconds()))
-				elapsedSeconds := int(timejump.Now().Unix() % int64(config.PostMetricsInterval.Milliseconds()))
+				elapsedSeconds := int(timejump.Now().Unix() % int64(config.PostMetricsInterval.Seconds()))
 				if postDelaySeconds > elapsedSeconds {
 					delaySeconds = postDelaySeconds - elapsedSeconds
 				}
