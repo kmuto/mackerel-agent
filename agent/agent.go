@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/agatan/timejump"
 	"github.com/mackerelio/mackerel-agent/checks"
 	"github.com/mackerelio/mackerel-agent/config"
 	"github.com/mackerelio/mackerel-agent/mackerel"
@@ -117,7 +119,6 @@ func (agent *Agent) Watch_mock(conf *config.Config, ctx context.Context, command
 
 // Watch XXX
 func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done chan struct{}) (chan *MetricsResult, error) {
-
 	metricsResult := make(chan *MetricsResult)
 	ticker := make(chan time.Time)
 	// interval := config.PostMetricsInterval
@@ -132,13 +133,16 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 		logger.Errorf("to format error %v", err)
 		return nil, errors.New("time format error")
 	}
-	finishTime := time.Duration(to.Unix()-from.Unix()) * time.Millisecond
 
 	go func() {
-		t := time.NewTicker(1 * time.Millisecond)
+		timejump.Activate()
+		defer timejump.Deactivate()
+		timejump.Scale(1000)
+		timejump.Jump(from)
 
-		last := time.Now()
-		stopAt := last.Add(finishTime)
+		t := time.NewTicker(1 * time.Millisecond) // 1 second->millisecond
+
+		last := timejump.Now()
 		ticker <- last // sends tick once at first
 
 		for {
@@ -147,25 +151,25 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 				close(ticker)
 				t.Stop()
 				return
-			case ti := <-t.C:
+			case <-t.C:
+				// t.Cの値は現在時刻ベース & ミリ秒カウンタなので見ても意味がない。timejump.Now()で動いている時間を使う
 				// Fire an event at 0 second per minute.
 				// Because ticks may not be accurate,
 				// fire an event if t - last is more than 1 minute
-				if ti.Equal(stopAt) || ti.After(stopAt) {
+				if last.Equal(to) || last.After(to) {
 					close(ticker)
 					t.Stop()
 					done <- struct{}{}
 					return
 				}
-				// FIXME: %がうまくいかないはず
-				//if ti.UnixMilli()%int64(interval.Milliseconds()) == 0 || ti.After(last.Add(interval)) {
-				if ti.UnixMilli()%int64(60) == 0 || ti.After(last.Add(60*time.Millisecond)) {
+				now := timejump.Now()
+				if now.Second()%60 == 0 || now.After(last.Add(60*time.Second)) {
 					// Non-blocking send of time.
 					// If `collectMetrics` runs with max concurrency, we drop ticks.
 					// Because the time is used as agent.MetricsResult.Created.
 					select {
-					case ticker <- ti:
-						last = ti
+					case ticker <- timejump.Now():
+						last = timejump.Now()
 					default:
 					}
 				}
@@ -183,6 +187,7 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 			ti := tickedTime
 			sem <- struct{}{}
 			go func() {
+				fmt.Println(ti)
 				metricsResult <- agent.CollectMetrics(ti)
 				<-sem
 			}()
