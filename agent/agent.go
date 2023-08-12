@@ -27,13 +27,29 @@ type MetricsResult struct {
 	Values  []*metrics.ValuesCustomIdentifier
 }
 
+func (agent *Agent) CollectMetrics_clockup(collectedTime time.Time, isDown bool) *MetricsResult {
+	generators := agent.MetricsGenerators
+	for _, g := range agent.PluginGenerators {
+		generators = append(generators, g)
+	}
+	values := generateValues(generators)
+	// ジェネレータによる取得時間を5秒としてみる
+	if isDown {
+		// ジェネレータは120秒を超えると警告するようになっているようだ。ただ停止するわけではない
+		<-time.After(120 * time.Millisecond)
+	} else {
+		<-time.After(5 * time.Millisecond)
+	}
+	return &MetricsResult{Created: collectedTime, Values: values}
+}
+
 // CollectMetrics collects metrics with generators.
 func (agent *Agent) CollectMetrics(collectedTime time.Time) *MetricsResult {
 	generators := agent.MetricsGenerators
 	for _, g := range agent.PluginGenerators {
 		generators = append(generators, g)
 	}
-	values := generateValues(generators)
+	values := generateValues_clockup(generators)
 	return &MetricsResult{Created: collectedTime, Values: values}
 }
 
@@ -42,6 +58,19 @@ func (agent *Agent) FromTo(conf *config.Config) (time.Time, time.Time) {
 	from, _ := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimFrom)
 	to, _ := time.Parse("2006-01-02T15:04:05Z07:00", conf.SimTo)
 	return from, to
+}
+
+func isDowntime(conf *config.Config, nowTime time.Time) bool {
+	for _, Down := range conf.SimDowns {
+		from, _ := time.Parse("2006-01-02T15:04:05Z07:00", Down[0])
+		to, _ := time.Parse("2006-01-02T15:04:05Z07:00", Down[1])
+
+		nowTime := timejump.Now()
+		if (from.Equal(nowTime) || from.Before(nowTime)) && to.After(nowTime) {
+			return true
+		}
+	}
+	return false
 }
 
 // Watch XXX
@@ -99,7 +128,7 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 			ti := tickedTime
 			sem <- struct{}{}
 			go func() {
-				metricsResult <- agent.CollectMetrics(ti)
+				metricsResult <- agent.CollectMetrics_clockup(ti, isDowntime(conf, ti))
 				<-sem
 			}()
 		}

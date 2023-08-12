@@ -304,7 +304,7 @@ func loop(app *App, termCh chan struct{}) error {
 				logger.Debugf("Merging datapoints with next queued ones")
 				nextValues := <-postQueue
 				origPostValues = append(origPostValues, nextValues)
-				fmt.Println("K:", timejump.Now().Unix(), ":BULKMODE:", origPostValues[0].values[0].Time, origPostValues[1].values[0].Time)
+				fmt.Println("K:", timejump.Now().Unix(), ":BULKMODE:", origPostValues[0].values[0].Time, origPostValues[1].values[0].Time, ":LEN:", len(postQueue))
 			}
 
 			delaySeconds := 0
@@ -368,11 +368,11 @@ func loop(app *App, termCh chan struct{}) error {
 				go func() {
 					for _, v := range origPostValues {
 						v.retryCnt++
-						fmt.Println("K:", timejump.Now().Unix(), ":REQUEUE(", v.retryCnt, "):", v.values[0].Time)
+						fmt.Println("K:", timejump.Now().Unix(), ":REQUEUE(", v.retryCnt, "):", v.values[0].Time, ":LEN:", len(postQueue))
 						// It is difficult to distinguish the error is server error or data error.
 						// So, if retryCnt exceeded the configured limit, postValue is considered invalid and abandoned.
 						if v.retryCnt > postMetricsRetryMax {
-							fmt.Println("K:", timejump.Now().Unix(), ":LOST:", v.values[0].Time)
+							fmt.Println("K:", timejump.Now().Unix(), ":LOST:", v.values[0].Time, ":LEN:", len(postQueue))
 							/* json, err := json.Marshal(v.values)
 							if err != nil {
 								logger.Errorf("Something wrong with post values. marshaling failed.")
@@ -426,14 +426,14 @@ func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, po
 
 	if isDowntime {
 		// 障害タイム
+		// まず20秒たって失敗する
+		<-time.After(time.Duration(20 * time.Millisecond))
 		for _, postValue := range postValues {
 			fmt.Println("K:", timejump.Now().Unix(), ":FAILED:", postValue.Time)
 		}
-		// 絶対に失敗するが20秒待って再送
-		select {
-		case <-time.After(time.Duration(20 * time.Millisecond)):
-			// nop
-		}
+		// 絶対に失敗するがさらに20秒待って再送
+		<-time.After(time.Duration(20 * time.Millisecond))
+
 		if timejump.Now().Before(deadline) {
 			for _, postValue := range postValues {
 				fmt.Println("K:", timejump.Now().Unix(), ":RETRYFAILED:", postValue.Time)
@@ -442,6 +442,8 @@ func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, po
 		err := errors.New("network connection problem")
 		return err
 	} else {
+		// 普通の投稿は5秒で完了するとする
+		<-time.After(time.Duration(5 * time.Millisecond))
 		for _, postValue := range postValues {
 			fmt.Println("K:", timejump.Now().Unix(), ":SUCCESS:", postValue.Time)
 			// XXX: Mackerelは実際には24h以上は受け付けるが無視する
@@ -508,7 +510,7 @@ func enqueueLoop_clockup(ctx context.Context, app *App, postQueue chan *postValu
 					Value: 100,
 				},
 			})
-			fmt.Println("K:", created, ":CREATE:", created)
+			fmt.Println("K:", created, ":CREATE:", created, ":LEN:", len(postQueue))
 			postQueue <- newPostValue(creatingValues)
 		}
 	}
