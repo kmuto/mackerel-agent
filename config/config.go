@@ -111,6 +111,9 @@ type Config struct {
 	HTTPSProxy    string        `toml:"https_proxy"`
 	CloudPlatform CloudPlatform `toml:"cloud_platform"`
 
+	SimFrom  string     `toml:"from"`
+	SimTo    string     `toml:"to"`
+	SimDowns [][]string `toml:"downs"`
 	// This Plugin field is used to decode the toml file. After reading the
 	// configuration from file, this field is set to nil.
 	// Please consider using MetricPlugins, CheckPlugins and MetadataPlugins.
