@@ -440,6 +440,7 @@ func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, po
 			}
 		}
 		err := errors.New("network connection problem")
+		// ゴルーチンの数。fmt.Println("RUNTIME=", runtime.NumGoroutine())
 		return err
 	} else {
 		// 普通の投稿は5秒で完了するとする
