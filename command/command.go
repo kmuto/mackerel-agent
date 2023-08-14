@@ -511,7 +511,7 @@ func enqueueLoop_clockup(ctx context.Context, app *App, postQueue chan *postValu
 					Value: 100,
 				},
 			})
-			fmt.Println("K:", created, ":CREATE:", created, ":LEN:", len(postQueue))
+			fmt.Println("K:", timejump.Now().Unix(), ":CREATE:", created, ":LEN:", len(postQueue))
 			postQueue <- newPostValue(creatingValues)
 		}
 	}

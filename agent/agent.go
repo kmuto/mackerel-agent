@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/agatan/timejump"
@@ -36,7 +37,8 @@ func (agent *Agent) CollectMetrics_clockup(collectedTime time.Time, isDown bool)
 	// ジェネレータによる取得時間を5秒としてみる
 	if isDown {
 		// ジェネレータは120秒を超えると警告するようになっているようだ。ただ停止するわけではない
-		<-time.After(120 * time.Millisecond)
+		// ここはあまり関係ないはずなので同じに
+		<-time.After(5 * time.Millisecond)
 	} else {
 		<-time.After(5 * time.Millisecond)
 	}
@@ -79,9 +81,10 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 	ticker := make(chan time.Time)
 	interval := config.PostMetricsInterval
 
-	_, to := agent.FromTo(conf)
+	from, to := agent.FromTo(conf)
 
 	go func() {
+		startTime := time.Now()
 		t := time.NewTicker(1 * time.Millisecond) // 1 second->millisecond
 		last := timejump.Now()
 		ticker <- last // sends tick once at first
@@ -92,8 +95,9 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 				close(ticker)
 				t.Stop()
 				return
-			case <-t.C:
-				// t.Cの値は現在時刻ベース & ミリ秒カウンタなので見ても意味がない。timejump.Now()で動いている時間を使う
+			case tick := <-t.C:
+				// t.Cの値は現在時刻ベース & ミリ秒カウンタ。1000倍システムの時間にする
+				now := from.Add(tick.Sub(startTime) * time.Duration(1000)) // tick値を使う
 				// Fire an event at 0 second per minute.
 				// Because ticks may not be accurate,
 				// fire an event if t - last is more than 1 minute
@@ -103,14 +107,14 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 					done <- struct{}{}
 					return
 				}
-				now := timejump.Now()
 				if now.Second()%int(interval.Seconds()) == 0 || now.After(last.Add(interval)) {
 					// Non-blocking send of time.
 					// If `collectMetrics` runs with max concurrency, we drop ticks.
 					// Because the time is used as agent.MetricsResult.Created.
+					// 全然tickerが詰まってくれないわけだが
 					select {
-					case ticker <- timejump.Now():
-						last = timejump.Now()
+					case ticker <- now:
+						last = now
 					default:
 					}
 				}
@@ -128,6 +132,9 @@ func (agent *Agent) Watch_clockup(conf *config.Config, ctx context.Context, done
 			ti := tickedTime
 			sem <- struct{}{}
 			go func() {
+				if timejump.Now().Sub(ti) > time.Duration(1*time.Minute) {
+					fmt.Println("K:", timejump.Now().Unix(), ":DELAYED:", ti.Unix())
+				}
 				metricsResult <- agent.CollectMetrics_clockup(ti, isDowntime(conf, ti))
 				<-sem
 			}()
