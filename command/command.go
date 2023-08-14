@@ -368,7 +368,6 @@ func loop(app *App, termCh chan struct{}) error {
 				go func() {
 					for _, v := range origPostValues {
 						v.retryCnt++
-						fmt.Println("K:", timejump.Now().Unix(), ":REQUEUE(", v.retryCnt, "):", v.values[0].Time, ":LEN:", len(postQueue))
 						// It is difficult to distinguish the error is server error or data error.
 						// So, if retryCnt exceeded the configured limit, postValue is considered invalid and abandoned.
 						if v.retryCnt > postMetricsRetryMax {
@@ -381,6 +380,7 @@ func loop(app *App, termCh chan struct{}) error {
 							} */
 							continue
 						}
+						fmt.Println("K:", timejump.Now().Unix(), ":REQUEUED(", v.retryCnt, "):", v.values[0].Time, ":LEN:", len(postQueue))
 						postQueue <- v
 					}
 				}()
@@ -513,6 +513,7 @@ func enqueueLoop_clockup(ctx context.Context, app *App, postQueue chan *postValu
 			})
 			fmt.Println("K:", timejump.Now().Unix(), ":CREATE:", created, ":LEN:", len(postQueue))
 			postQueue <- newPostValue(creatingValues)
+			fmt.Println("K:", timejump.Now().Unix(), ":QUEUED:", created, ":LEN:", len(postQueue))
 		}
 	}
 }
