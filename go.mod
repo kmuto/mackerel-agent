@@ -24,6 +24,7 @@ require (
 
 require (
 	github.com/Songmu/wrapcommander v0.1.0 // indirect
+	github.com/agatan/timejump v0.0.0-20171201151016-50c5a7a281e0 // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
 	github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect

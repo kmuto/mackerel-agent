@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Songmu/retry"
+	"github.com/agatan/timejump"
 	"github.com/mackerelio/golib/logging"
 	"github.com/mackerelio/mackerel-agent/agent"
 	"github.com/mackerelio/mackerel-agent/checks"
@@ -22,7 +24,9 @@ import (
 )
 
 var logger = logging.GetLogger("command")
-var metricsInterval = 60 * time.Second
+
+// secondからmsに変更
+var metricsInterval = 60 * time.Millisecond
 
 var retryNum uint = 20
 var retryInterval = 3 * time.Second
@@ -43,6 +47,15 @@ var (
 type AgentMeta struct {
 	Version  string
 	Revision string
+}
+
+func prepareHost_mock(conf *config.Config, ameta *AgentMeta, api *mackerel.API) (*mkr.Host, error) {
+	result := &mkr.Host{
+		ID:        "4V5NGvELNaw",
+		Name:      "foobar",
+		IsRetired: false,
+	}
+	return result, nil
 }
 
 // prepareHost collects specs of the host and sends them to Mackerel server.
@@ -201,24 +214,34 @@ const (
 	loopStateTerminating
 )
 
+// ここにいろいろ仕込んだ(kmuto)
 func loop(app *App, termCh chan struct{}) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	from, _ := app.Agent.FromTo(app.Config)
+	timejump.Activate()
+	defer timejump.Deactivate()
+	timejump.Scale(1000)
+	timejump.Jump(from)
+
+	// 省略した
 	// Periodically update host specs.
-	go updateHostSpecsLoop(ctx, app)
+	// go updateHostSpecsLoop(ctx, app)
 
 	postQueue := make(chan *postValue, postMetricsBufferSize)
-	go enqueueLoop(ctx, app, postQueue)
+	done := make(chan struct{})
+	go enqueueLoop_clockup(ctx, app, postQueue, done)
 
 	postDelaySeconds := delayByHost(app.Host)
 	initialDelay := postDelaySeconds / 2
 	logger.Debugf("wait %d seconds before initial posting.", initialDelay)
+
 	select {
 	case <-termCh:
 		return nil
-	case <-time.After(time.Duration(initialDelay) * time.Second):
-		app.Agent.InitPluginGenerators(app.API)
+	case <-time.After(time.Duration(initialDelay) * time.Millisecond):
+		// app.Agent.InitPluginGenerators(app.API)
 	}
 
 	termMetricsCh := make(chan struct{})
@@ -257,12 +280,19 @@ func loop(app *App, termCh chan struct{}) error {
 	}
 
 	lState := loopStateFirst
+	fmt.Println("K:", timejump.Now().Unix(), ":START:")
+
 	for {
 		select {
 		case <-termMetricsCh:
 			if lState == loopStateTerminating {
 				return fmt.Errorf("received terminate instruction again. force return")
 			}
+			lState = loopStateTerminating
+			if len(postQueue) <= 0 {
+				return nil
+			}
+		case <-done:
 			lState = loopStateTerminating
 			if len(postQueue) <= 0 {
 				return nil
@@ -274,6 +304,7 @@ func loop(app *App, termCh chan struct{}) error {
 				logger.Debugf("Merging datapoints with next queued ones")
 				nextValues := <-postQueue
 				origPostValues = append(origPostValues, nextValues)
+				fmt.Println("K:", timejump.Now().Unix(), ":BULKMODE:", origPostValues[0].values[0].Time, origPostValues[1].values[0].Time, ":LEN:", len(postQueue))
 			}
 
 			delaySeconds := 0
@@ -293,7 +324,8 @@ func loop(app *App, termCh chan struct{}) error {
 				// To prevent flooding, this loop sleeps for some seconds
 				// which is specific to the ID of the host running agent on.
 				// The sleep second is up to 60s (to be exact up to `config.Postmetricsinterval.Seconds()`.
-				elapsedSeconds := int(time.Now().Unix() % int64(config.PostMetricsInterval.Seconds()))
+				// elapsedSeconds := int(time.Now().Unix() % int64(config.PostMetricsInterval.Seconds()))
+				elapsedSeconds := int(timejump.Now().Unix() % int64(config.PostMetricsInterval.Seconds()))
 				if postDelaySeconds > elapsedSeconds {
 					delaySeconds = postDelaySeconds - elapsedSeconds
 				}
@@ -310,9 +342,14 @@ func loop(app *App, termCh chan struct{}) error {
 
 			logger.Debugf("Sleep %d seconds before posting.", delaySeconds)
 			select {
-			case <-time.After(time.Duration(delaySeconds) * time.Second):
+			case <-time.After(time.Duration(delaySeconds) * time.Millisecond):
 				// nop
 			case <-termMetricsCh:
+				if lState == loopStateTerminating {
+					return fmt.Errorf("received terminate instruction again. force return")
+				}
+				lState = loopStateTerminating
+			case <-done:
 				if lState == loopStateTerminating {
 					return fmt.Errorf("received terminate instruction again. force return")
 				}
@@ -323,7 +360,7 @@ func loop(app *App, termCh chan struct{}) error {
 			for _, v := range origPostValues {
 				postValues = append(postValues, v.values...)
 			}
-			err := postHostMetricValuesWithRetry(app, postValues)
+			err := postHostMetricValuesWithRetry_clockup(timejump.Now(), app, postValues)
 			if err != nil {
 				if lState != loopStateTerminating {
 					lState = loopStateHadError
@@ -334,14 +371,16 @@ func loop(app *App, termCh chan struct{}) error {
 						// It is difficult to distinguish the error is server error or data error.
 						// So, if retryCnt exceeded the configured limit, postValue is considered invalid and abandoned.
 						if v.retryCnt > postMetricsRetryMax {
-							json, err := json.Marshal(v.values)
+							fmt.Println("K:", timejump.Now().Unix(), ":LOST:", v.values[0].Time, ":LEN:", len(postQueue))
+							/* json, err := json.Marshal(v.values)
 							if err != nil {
 								logger.Errorf("Something wrong with post values. marshaling failed.")
 							} else {
 								logger.Errorf("Post values may be invalid and abandoned: %s", string(json))
-							}
+							} */
 							continue
 						}
+						fmt.Println("K:", timejump.Now().Unix(), ":REQUEUED(", v.retryCnt, "):", v.values[0].Time, ":LEN:", len(postQueue))
 						postQueue <- v
 					}
 				}()
@@ -351,7 +390,66 @@ func loop(app *App, termCh chan struct{}) error {
 			if lState == loopStateTerminating && len(postQueue) <= 0 {
 				return nil
 			}
+			if lState == loopStateTerminating {
+				// 強制的に終わらせる
+				close(postQueue)
+				for v := range postQueue {
+					fmt.Println("K:", timejump.Now().Unix(), ":REMAIN:", v.values[0].Time)
+				}
+				return nil
+			}
 		}
+	}
+}
+
+func postHostMetricValuesWithRetry_clockup(realStartTime time.Time, app *App, postValues []*mkr.HostMetricValue) error {
+	deadline := timejump.Now().Add(25 * time.Second)
+
+	isDowntime := false
+	for _, Down := range app.Config.SimDowns {
+		from, err := time.Parse("2006-01-02T15:04:05Z07:00", Down[0])
+		if err != nil {
+			logger.Errorf("down from format error %v", err)
+			return errors.New("time format error")
+		}
+		to, err := time.Parse("2006-01-02T15:04:05Z07:00", Down[1])
+		if err != nil {
+			logger.Errorf("down to format error %v", err)
+			return errors.New("time format error")
+		}
+
+		nowTime := timejump.Now()
+		if (from.Equal(nowTime) || from.Before(nowTime)) && to.After(nowTime) {
+			isDowntime = true
+		}
+	}
+
+	if isDowntime {
+		// 障害タイム
+		// まず20秒たって失敗する
+		<-time.After(time.Duration(20 * time.Millisecond))
+		for _, postValue := range postValues {
+			fmt.Println("K:", timejump.Now().Unix(), ":FAILED:", postValue.Time)
+		}
+		// 絶対に失敗するがさらに20秒待って再送
+		<-time.After(time.Duration(20 * time.Millisecond))
+
+		if timejump.Now().Before(deadline) {
+			for _, postValue := range postValues {
+				fmt.Println("K:", timejump.Now().Unix(), ":RETRYFAILED:", postValue.Time)
+			}
+		}
+		err := errors.New("network connection problem")
+		// ゴルーチンの数。fmt.Println("RUNTIME=", runtime.NumGoroutine())
+		return err
+	} else {
+		// 普通の投稿は5秒で完了するとする
+		<-time.After(time.Duration(5 * time.Millisecond))
+		for _, postValue := range postValues {
+			fmt.Println("K:", timejump.Now().Unix(), ":SUCCESS:", postValue.Time)
+			// XXX: Mackerelは実際には24h以上は受け付けるが無視する
+		}
+		return nil
 	}
 }
 
@@ -385,6 +483,37 @@ func updateHostSpecsLoop(ctx context.Context, app *App) {
 			return
 		case <-time.After(specsUpdateInterval):
 			// nop
+		}
+	}
+}
+
+func enqueueLoop_clockup(ctx context.Context, app *App, postQueue chan *postValue, done chan struct{}) {
+	done2 := make(chan struct{})
+	metricsResult, err := app.Agent.Watch_clockup(app.Config, ctx, done2)
+	if err != nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done2:
+			done <- struct{}{}
+			return
+		case result := <-metricsResult:
+			created := result.Created.Unix()
+			var creatingValues []*mkr.HostMetricValue
+			creatingValues = append(creatingValues, &mkr.HostMetricValue{
+				HostID: "9rxGOHfVF8F",
+				MetricValue: &mkr.MetricValue{
+					Name:  "custom.test1",
+					Time:  created,
+					Value: 100,
+				},
+			})
+			fmt.Println("K:", timejump.Now().Unix(), ":CREATE:", created, ":LEN:", len(postQueue))
+			postQueue <- newPostValue(creatingValues)
+			fmt.Println("K:", timejump.Now().Unix(), ":QUEUED:", created, ":LEN:", len(postQueue))
 		}
 	}
 }
@@ -670,10 +799,12 @@ func collectHostParam(conf *config.Config, ameta *AgentMeta) (*mkr.CreateHostPar
 	}, nil
 }
 
+func (app *App) UpdateHostSpecs_mock() {
+}
+
 // UpdateHostSpecs updates the host information that is already registered on Mackerel.
 func (app *App) UpdateHostSpecs() {
 	logger.Debugf("Updating host specs...")
-
 	hostParam, err := collectHostParam(app.Config, app.AgentMeta)
 	if err != nil {
 		logger.Errorf("While collecting host specs: %s", err)
@@ -713,11 +844,10 @@ func Prepare(conf *config.Config, ameta *AgentMeta) (*App, error) {
 		return nil, fmt.Errorf("failed to prepare an api: %s", err.Error())
 	}
 
-	host, err := prepareHost(conf, ameta, api)
+	host, err := prepareHost_mock(conf, ameta, api)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare host: %s", err.Error())
 	}
-
 	return &App{
 		Agent:                 NewAgent(conf),
 		Config:                conf,
@@ -782,10 +912,11 @@ func Run(app *App, termCh chan struct{}) error {
 	err := loop(app, termCh)
 	if err == nil && app.Config.HostStatus.OnStop != "" {
 		// TODO error handling. support retire(?)
-		e := app.API.UpdateHostStatus(app.Host.ID, app.Config.HostStatus.OnStop)
+		// 以下はコメントアウトした
+		/*e := app.API.UpdateHostStatus(app.Host.ID, app.Config.HostStatus.OnStop)
 		if e != nil {
 			logger.Errorf("Failed update host status on stop: %s", e)
-		}
+		} */
 	}
 	return err
 }
