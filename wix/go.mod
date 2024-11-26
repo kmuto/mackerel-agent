@@ -1,11 +1,13 @@
 module github.com/mackerelio/mackerel-agent/wix
 
-go 1.21.0
+go 1.22.3
+
+toolchain go1.23.2
 
 require (
-	github.com/mackerelio/go-check-plugins v0.46.3
-	github.com/mackerelio/mackerel-agent-plugins v0.82.1
-	github.com/mackerelio/mkr v0.58.0
+	github.com/mackerelio/go-check-plugins v0.47.0
+	github.com/mackerelio/mackerel-agent-plugins v0.86.0
+	github.com/mackerelio/mkr v0.59.0
 	github.com/mattn/go-encoding v0.0.2
 	golang.org/x/sys v0.21.0
 )
@@ -36,9 +38,9 @@ require (
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/mackerelio/checkers v0.2.0 // indirect
-	github.com/mackerelio/go-mackerel-plugin v0.1.4 // indirect
-	github.com/mackerelio/go-mackerel-plugin-helper v0.1.2 // indirect
-	github.com/mackerelio/go-osstat v0.2.4 // indirect
+	github.com/mackerelio/go-mackerel-plugin v0.1.5 // indirect
+	github.com/mackerelio/go-mackerel-plugin-helper v0.1.3 // indirect
+	github.com/mackerelio/go-osstat v0.2.5 // indirect
 	github.com/mackerelio/golib v1.2.1 // indirect
 	github.com/mackerelio/mackerel-agent v0.81.0 // indirect
 	github.com/mackerelio/mackerel-client-go v0.33.1 // indirect
@@ -55,7 +57,7 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sergi/go-diff v1.3.1 // indirect
-	github.com/shirou/gopsutil/v3 v3.24.3 // indirect
+	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/tatsushid/go-fastping v0.0.0-20160109021039-d7bb493dee3e // indirect
 	github.com/tcnksm/go-gitconfig v0.1.2 // indirect
 	github.com/ulikunitz/xz v0.5.12 // indirect
@@ -65,12 +67,10 @@ require (
 	github.com/yudai/golcs v0.0.0-20170316035057-ecda9a501e82 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/crypto v0.24.0 // indirect
-	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616 // indirect
 	golang.org/x/net v0.25.0 // indirect
 	golang.org/x/oauth2 v0.21.0 // indirect
-	golang.org/x/sync v0.7.0 // indirect
+	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/term v0.21.0 // indirect
-	golang.org/x/text v0.16.0 // indirect
-	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
+	golang.org/x/text v0.17.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
